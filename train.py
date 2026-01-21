@@ -1,8 +1,12 @@
 import os
 import sys
 import logging
+import subprocess
+import threading
+import time
 
 import mlflow
+from pyngrok import ngrok
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -58,6 +62,29 @@ def main():
     if "mlflow" in training_args.report_to or training_args.report_to == "all":
         mlflow.set_experiment(data_args.mlflow_experiment)
         logger.info(f"MLflow Experiment set to: {data_args.mlflow_experiment}")
+
+        # Start MLflow UI and Ngrok Tunnel
+        try:
+            # Check if MLflow UI is already running (simple check prevents duplicate processes)
+            # This is a basic background start.
+            logger.info("Starting MLflow UI in the background...")
+            subprocess.Popen(
+                ["mlflow", "ui", "--port", "5000"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            
+            # Give it a moment to start
+            time.sleep(3)
+
+            # Open Ngrok Tunnel
+            port = 5000
+            public_url = ngrok.connect(port).public_url
+            logger.info(f"Ngrok Tunnel created for port {port}")
+            print(f"\n{'='*60}\n🚀 MLflow Dashboard available at: {public_url}\n{'='*60}\n")
+            
+        except Exception as e:
+            logger.warning(f"Failed to set up Ngrok/MLflow UI automatically: {e}")
 
     # 1. Load Data
     logger.info(f"Loading data from {data_args.dataset_path}")

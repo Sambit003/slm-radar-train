@@ -9,3 +9,4 @@ numpy
 pandas
 tqdm
 mlflow
+pyngrok
