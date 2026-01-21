@@ -1,0 +1,35 @@
+{
+    "output_dir": "./outputs/finetune_run",
+    "overwrite_output_dir": true,
+    
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 16,
+    "per_device_eval_batch_size": 8,
+    "gradient_accumulation_steps": 4,
+    
+    "learning_rate": 2e-4,
+    "lr_scheduler_type": "cosine",
+    "warmup_ratio": 0.1,
+    
+    "max_grad_norm": 1.0,
+    "weight_decay": 0.01,
+    "label_smoothing_factor": 0.1,
+    
+    "logging_steps": 10,
+    "logging_first_step": true,
+    "save_strategy": "epoch",
+    "eval_strategy": "epoch",
+    
+    "load_best_model_at_end": true,
+    "metric_for_best_model": "eval_loss",
+    "greater_is_better": false,
+    
+    "bf16": true,
+    "dataloader_num_workers": 4,
+    "dataloader_pin_memory": true,
+    
+    "report_to": ["mlflow"],
+    "seed": 42,
+    
+    "_comment": "Stable training config with gradient clipping, warmup, and label smoothing"
+}

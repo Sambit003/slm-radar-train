@@ -3,6 +3,37 @@ from typing import Optional, Tuple, Dict, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+class LabelSmoothingCrossEntropy(nn.Module):
+    """Cross entropy loss with label smoothing for training stability."""
+
+    def __init__(self, smoothing: float = 0.0, reduction: str = "mean"):
+        super().__init__()
+        self.smoothing = smoothing
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if self.smoothing == 0.0:
+            return F.cross_entropy(logits, targets, reduction=self.reduction)
+
+        n_classes = logits.size(-1)
+        log_probs = F.log_softmax(logits, dim=-1)
+
+        # Create smoothed targets
+        with torch.no_grad():
+            smooth_targets = torch.zeros_like(log_probs)
+            smooth_targets.fill_(self.smoothing / (n_classes - 1))
+            smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.smoothing)
+
+        loss = (-smooth_targets * log_probs).sum(dim=-1)
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
 
 
 class GemmaMultiHeadClassifier(nn.Module):
@@ -11,20 +42,27 @@ class GemmaMultiHeadClassifier(nn.Module):
     - Threat Detection (Binary)
     - Category Classification (Multi-class)
     - Sub-category Classification (Multi-class)
+
+    Includes training stabilization features:
+    - Label smoothing support
+    - Weighted loss for imbalanced heads
     """
 
     def __init__(
         self,
         base_model: nn.Module,
         num_categories: int,
-        num_subcategories: int
+        num_subcategories: int,
+        loss_weights: Tuple[float, float, float] = (1.0, 1.0, 1.0)
     ):
         super().__init__()
         self.backbone = base_model
         self.config = base_model.config
         hidden_size = self.config.hidden_size
+        self.loss_weights = loss_weights
 
-        # Classification Heads
+        # Classification Heads with optional dropout for regularization
+        self.head_dropout = nn.Dropout(p=0.1)
         self.threat_head = nn.Linear(hidden_size, 2)
         self.category_head = nn.Linear(hidden_size, num_categories)
         self.subcategory_head = nn.Linear(hidden_size, num_subcategories)
@@ -34,7 +72,7 @@ class GemmaMultiHeadClassifier(nn.Module):
         self.category_head.to(self.backbone.dtype)
         self.subcategory_head.to(self.backbone.dtype)
 
-        # Loss function
+        # Default loss function (can be overridden in forward with label_smoothing)
         self.loss_fct = nn.CrossEntropyLoss()
 
     @property
@@ -62,9 +100,10 @@ class GemmaMultiHeadClassifier(nn.Module):
         labels_threat: Optional[torch.LongTensor] = None,
         labels_category: Optional[torch.LongTensor] = None,
         labels_subcategory: Optional[torch.LongTensor] = None,
+        label_smoothing: float = 0.0,
         **kwargs
     ) -> Union[Tuple[torch.Tensor, ...], Dict[str, torch.Tensor]]:
-        """Forward pass for the multi-head model."""
+        """Forward pass for the multi-head model with label smoothing support."""
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -81,6 +120,8 @@ class GemmaMultiHeadClassifier(nn.Module):
         else:
             pooled_output = last_hidden_state[:, -1]
 
+        pooled_output = self.head_dropout(pooled_output)
+
         logits_threat = self.threat_head(pooled_output)
         logits_category = self.category_head(pooled_output)
         logits_subcategory = self.subcategory_head(pooled_output)
@@ -92,9 +133,15 @@ class GemmaMultiHeadClassifier(nn.Module):
             and labels_subcategory is not None
         )
         if all_labels_present:
-            loss_t = self.loss_fct(logits_threat, labels_threat)
-            loss_c = self.loss_fct(logits_category, labels_category)
-            loss_s = self.loss_fct(logits_subcategory, labels_subcategory)
+            # Use label smoothing loss if specified
+            if label_smoothing > 0.0:
+                loss_fn = LabelSmoothingCrossEntropy(smoothing=label_smoothing)
+            else:
+                loss_fn = self.loss_fct
+
+            loss_t = loss_fn(logits_threat, labels_threat) * self.loss_weights[0]
+            loss_c = loss_fn(logits_category, labels_category) * self.loss_weights[1]
+            loss_s = loss_fn(logits_subcategory, labels_subcategory) * self.loss_weights[2]
             loss = loss_t + loss_c + loss_s
 
         output = (logits_threat, logits_category, logits_subcategory)

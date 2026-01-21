@@ -71,6 +71,18 @@ def main():
     training_args.greater_is_better = False
     training_args.eval_strategy = "epoch"
     training_args.save_strategy = "epoch"
+    training_args.max_grad_norm = 1.0
+    training_args.warmup_ratio = 0.1
+    training_args.lr_scheduler_type = "cosine"
+    if not hasattr(training_args, 'weight_decay') or training_args.weight_decay == 0:
+        training_args.weight_decay = 0.01
+    training_args.label_smoothing_factor = 0.1
+
+    logger.info(
+        f"Training Stabilization: max_grad_norm={training_args.max_grad_norm}, "
+        f"warmup_ratio={training_args.warmup_ratio}, lr_scheduler={training_args.lr_scheduler_type}, "
+        f"weight_decay={training_args.weight_decay}, label_smoothing={training_args.label_smoothing_factor}"
+    )
 
     # Set MLFlow Experiment
     if "mlflow" in training_args.report_to or training_args.report_to == "all":
@@ -198,7 +210,8 @@ def main():
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+        label_smoothing=training_args.label_smoothing_factor
     )
 
     # 6. Train
