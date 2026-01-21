@@ -49,6 +49,11 @@ def main():
     set_seed(training_args.seed)
     logger.info(f"Training on device: {device}")
 
+    # Ensure Trainer gathers our custom labels
+    training_args.label_names = [
+        "labels_threat", "labels_category", "labels_subcategory"
+    ]
+
     # Set MLFlow Experiment
     if "mlflow" in training_args.report_to or training_args.report_to == "all":
         mlflow.set_experiment(data_args.mlflow_experiment)
@@ -138,12 +143,18 @@ def main():
         training_args.dataloader_pin_memory = False
         logger.info("TPU detected: using adamw_torch optimizer")
 
+    if data_args.use_gradient_checkpointing:
+        training_args.gradient_checkpointing = True
+        logger.info("Gradient Checkpointing ENABLED")
+
     # 5. Trainer
     trainer = MultiHeadTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
+        compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
     # 6. Train
