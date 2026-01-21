@@ -9,6 +9,10 @@ class ModelArguments:
         default="google/gemma-3-270m",
         metadata={"help": "Model identifier from huggingface.co/models"}
     )
+    hf_token: str = field(
+        default=None,
+        metadata={"help": "HuggingFace token for gated models"}
+    )
     lora_r: int = field(
         default=16,
         metadata={"help": "LoRA attention dimension"}

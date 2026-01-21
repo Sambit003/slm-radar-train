@@ -54,9 +54,11 @@ def main():
     # Save encoders for inference usage later
     threat_dataset.save_encoders(training_args.output_dir)
 
+    # 2. Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
-        trust_remote_code=True
+        trust_remote_code=True,
+        token=model_args.hf_token
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -79,7 +81,8 @@ def main():
     base_model = AutoModel.from_pretrained(
         model_args.model_name_or_path,
         torch_dtype=dtype,
-        trust_remote_code=True
+        trust_remote_code=True,
+        token=model_args.hf_token
     )
 
     target_modules = [
