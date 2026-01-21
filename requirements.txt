@@ -1,0 +1,9 @@
+torch>=2.0.0
+transformers
+datasets
+peft
+scikit-learn
+evaluate
+accelerate
+numpy
+pandas
