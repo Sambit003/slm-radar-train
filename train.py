@@ -69,7 +69,7 @@ def main():
             # This is a basic background start.
             logger.info("Starting MLflow UI in the background...")
             subprocess.Popen(
-                ["mlflow", "ui", "--port", "5000"],
+                ["mlflow", "ui", "--host", "0.0.0.0", "--port", "5000"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
@@ -79,7 +79,7 @@ def main():
 
             # Open Ngrok Tunnel
             port = 5000
-            public_url = ngrok.connect(port).public_url
+            public_url = ngrok.connect(port, host_header="rewrite").public_url
             logger.info(f"Ngrok Tunnel created for port {port}")
             print(f"\n{'='*60}\n🚀 MLflow Dashboard available at: {public_url}\n{'='*60}\n")
             
