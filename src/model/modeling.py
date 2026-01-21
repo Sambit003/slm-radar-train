@@ -29,6 +29,11 @@ class GemmaMultiHeadClassifier(nn.Module):
         self.category_head = nn.Linear(hidden_size, num_categories)
         self.subcategory_head = nn.Linear(hidden_size, num_subcategories)
 
+        # Cast heads to the same dtype as the backbone
+        self.threat_head.to(self.backbone.dtype)
+        self.category_head.to(self.backbone.dtype)
+        self.subcategory_head.to(self.backbone.dtype)
+
         # Loss function
         self.loss_fct = nn.CrossEntropyLoss()
 

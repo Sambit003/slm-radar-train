@@ -53,6 +53,13 @@ def main():
     set_seed(training_args.seed)
     logger.info(f"Training on device: {device}")
 
+    os.environ["WANDB_DISABLED"] = "true"
+    if "wandb" in training_args.report_to:
+        if isinstance(training_args.report_to, list):
+            training_args.report_to.remove("wandb")
+        elif training_args.report_to == "wandb":
+            training_args.report_to = "none"
+
     # Ensure Trainer gathers our custom labels
     training_args.label_names = [
         "labels_threat", "labels_category", "labels_subcategory"
