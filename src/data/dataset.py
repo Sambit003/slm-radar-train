@@ -57,35 +57,58 @@ class ThreatDataset:
     def get_hf_dataset(
         self,
         tokenizer: PreTrainedTokenizer,
-        max_length: int
+        max_length: int,
+        batch_size: int = 1000
     ) -> HFDataset:
         """Converts raw data to a tokenized Hugging Face Dataset."""
-        print("Extracting prompts and labels...")
-        prompts = [item['prompt'] for item in self.raw_data]
-        threats = [str(item['is_threat']).lower() for item in self.raw_data]
-        categories = [item.get('category', 'unknown') for item in self.raw_data]
-        subcats = [item.get('sub-category', 'unknown') for item in self.raw_data]
-
-        print("Batch tokenizing prompts...")
-        tokenized = tokenizer(
-            prompts,
-            truncation=True,
-            padding="max_length",
-            max_length=max_length
-        )
-
-        print("Batch encoding labels...")
-        labels_threat = self.encoders['threat'].transform(threats)
-        labels_category = self.encoders['category'].transform(categories)
-        labels_subcategory = self.encoders['subcategory'].transform(subcats)
-
         processed_data = {
-            "input_ids": tokenized["input_ids"],
-            "attention_mask": tokenized["attention_mask"],
-            "labels_threat": labels_threat.tolist(),
-            "labels_category": labels_category.tolist(),
-            "labels_subcategory": labels_subcategory.tolist()
+            "input_ids": [],
+            "attention_mask": [],
+            "labels_threat": [],
+            "labels_category": [],
+            "labels_subcategory": []
         }
 
-        print("Creating HuggingFace Dataset...")
+        total_samples = len(self.raw_data)
+        num_batches = (total_samples + batch_size - 1) // batch_size
+
+        for i in tqdm(
+            range(0, total_samples, batch_size),
+            total=num_batches,
+            desc="Processing batches"
+        ):
+            batch = self.raw_data[i:i + batch_size]
+
+            prompts = [item['prompt'] for item in batch]
+            threats = [str(item['is_threat']).lower() for item in batch]
+            categories = [item.get('category', 'unknown') for item in batch]
+            subcats = [
+                item.get('sub-category', 'unknown') for item in batch
+            ]
+
+            tokenized = tokenizer(
+                prompts,
+                truncation=True,
+                padding="max_length",
+                max_length=max_length
+            )
+
+            labels_threat = self.encoders['threat'].transform(threats)
+            labels_category = self.encoders['category'].transform(categories)
+            labels_subcategory = self.encoders['subcategory'].transform(
+                subcats
+            )
+
+            processed_data["input_ids"].extend(tokenized["input_ids"])
+            processed_data["attention_mask"].extend(
+                tokenized["attention_mask"]
+            )
+            processed_data["labels_threat"].extend(labels_threat.tolist())
+            processed_data["labels_category"].extend(
+                labels_category.tolist()
+            )
+            processed_data["labels_subcategory"].extend(
+                labels_subcategory.tolist()
+            )
+
         return HFDataset.from_dict(processed_data).with_format("torch")
