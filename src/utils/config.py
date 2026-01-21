@@ -39,7 +39,11 @@ class DataArguments:
         default=512,
         metadata={"help": "Max input sequence length after tokenization."}
     )
-    test_size: float = field(
+    val_size: float = field(
         default=0.1,
         metadata={"help": "Proportion of dataset for validation."}
+    )
+    test_size: float = field(
+        default=0.1,
+        metadata={"help": "Proportion of dataset for final test."}
     )

@@ -5,7 +5,7 @@ import logging
 import torch
 from transformers import (
     AutoTokenizer,
-    AutoModel,
+    AutoModelForCausalLM,
     TrainingArguments,
     HfArgumentParser,
     set_seed
@@ -70,27 +70,44 @@ def main():
         data_args.max_seq_length
     )
 
-    # Split
-    dataset_splits = hf_dataset.train_test_split(test_size=data_args.test_size)
-    train_ds = dataset_splits["train"]
-    eval_ds = dataset_splits["test"]
+    # Split: train / val / test (3-way)
+    test_val_size = data_args.val_size + data_args.test_size
+    temp_split = hf_dataset.train_test_split(
+        test_size=test_val_size,
+        seed=training_args.seed
+    )
+    train_ds = temp_split["train"]
+
+    # Split remaining into val and test
+    val_test_ratio = data_args.test_size / test_val_size
+    val_test_split = temp_split["test"].train_test_split(
+        test_size=val_test_ratio,
+        seed=training_args.seed
+    )
+    eval_ds = val_test_split["train"]  # validation
+    test_ds = val_test_split["test"]   # held-out test
+
+    logger.info(
+        f"Dataset splits - Train: {len(train_ds)}, "
+        f"Val: {len(eval_ds)}, Test: {len(test_ds)}"
+    )
 
     logger.info(f"Loading base model: {model_args.model_name_or_path}")
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if use_bf16 else torch.float32
-    base_model = AutoModel.from_pretrained(
+    base_model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         torch_dtype=dtype,
         trust_remote_code=True,
         token=model_args.hf_token
-    )
+    ).model
 
     target_modules = [
         "q_proj", "v_proj", "k_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj"
     ]
     peft_config = LoraConfig(
-        task_type=TaskType.FEATURE_EXTRACTION,
+        task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
         r=model_args.lora_r,
         lora_alpha=model_args.lora_alpha,
@@ -108,6 +125,11 @@ def main():
         num_categories=num_cats,
         num_subcategories=num_subcats
     )
+
+    if str(device).startswith("xla"):
+        training_args.optim = "adamw_torch"
+        training_args.dataloader_pin_memory = False
+        logger.info("TPU detected: using adamw_torch optimizer")
 
     # 5. Trainer
     trainer = MultiHeadTrainer(
