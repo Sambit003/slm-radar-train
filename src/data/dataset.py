@@ -2,6 +2,7 @@ import json
 import os
 import pickle
 
+from tqdm import tqdm
 from datasets import Dataset as HFDataset
 from sklearn.preprocessing import LabelEncoder
 from transformers import PreTrainedTokenizer
@@ -24,8 +25,14 @@ class ThreatDataset:
     def _load_data(self):
         """Loads JSONL data."""
         data = []
+        try:
+            with open(self.data_path, 'r', encoding='utf-8') as f:
+                total_lines = sum(1 for _ in f)
+        except Exception:
+            total_lines = None
+
         with open(self.data_path, 'r', encoding='utf-8') as f:
-            for line in f:
+            for line in tqdm(f, total=total_lines, desc=f"Loading {os.path.basename(self.data_path)}"):
                 if line.strip():
                     data.append(json.loads(line))
         return data
@@ -53,39 +60,32 @@ class ThreatDataset:
         max_length: int
     ) -> HFDataset:
         """Converts raw data to a tokenized Hugging Face Dataset."""
+        print("Extracting prompts and labels...")
+        prompts = [item['prompt'] for item in self.raw_data]
+        threats = [str(item['is_threat']).lower() for item in self.raw_data]
+        categories = [item.get('category', 'unknown') for item in self.raw_data]
+        subcats = [item.get('sub-category', 'unknown') for item in self.raw_data]
+
+        print("Batch tokenizing prompts...")
+        tokenized = tokenizer(
+            prompts,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length
+        )
+
+        print("Batch encoding labels...")
+        labels_threat = self.encoders['threat'].transform(threats)
+        labels_category = self.encoders['category'].transform(categories)
+        labels_subcategory = self.encoders['subcategory'].transform(subcats)
+
         processed_data = {
-            "input_ids": [],
-            "attention_mask": [],
-            "labels_threat": [],
-            "labels_category": [],
-            "labels_subcategory": []
+            "input_ids": tokenized["input_ids"],
+            "attention_mask": tokenized["attention_mask"],
+            "labels_threat": labels_threat.tolist(),
+            "labels_category": labels_category.tolist(),
+            "labels_subcategory": labels_subcategory.tolist()
         }
 
-        for item in self.raw_data:
-            # Tokenize
-            encodings = tokenizer(
-                item['prompt'],
-                truncation=True,
-                padding="max_length",
-                max_length=max_length
-            )
-            
-            t_label = str(item['is_threat']).lower()
-            c_label = item.get('category', 'unknown')
-            s_label = item.get('sub-category', 'unknown')
-
-            processed_data["input_ids"].append(encodings["input_ids"])
-            processed_data["attention_mask"].append(
-                encodings["attention_mask"]
-            )
-            processed_data["labels_threat"].append(
-                self.encoders['threat'].transform([t_label])[0]
-            )
-            processed_data["labels_category"].append(
-                self.encoders['category'].transform([c_label])[0]
-            )
-            processed_data["labels_subcategory"].append(
-                self.encoders['subcategory'].transform([s_label])[0]
-            )
-
+        print("Creating HuggingFace Dataset...")
         return HFDataset.from_dict(processed_data).with_format("torch")
