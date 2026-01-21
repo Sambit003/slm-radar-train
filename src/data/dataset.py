@@ -3,7 +3,7 @@ import os
 import pickle
 
 from tqdm import tqdm
-from datasets import Dataset as HFDataset
+from datasets import load_dataset, Dataset as HFDataset
 from sklearn.preprocessing import LabelEncoder
 from transformers import PreTrainedTokenizer
 
@@ -14,7 +14,9 @@ class ThreatDataset:
     """
     def __init__(self, data_path: str):
         self.data_path = data_path
-        self.raw_data = self._load_data()
+        # Use load_dataset for memory efficiency (memory mapping)
+        print(f"Loading dataset from {data_path} using memory mapping...")
+        self.dataset = load_dataset('json', data_files=data_path, split='train')
         self.encoders = {
             "threat": LabelEncoder(),
             "category": LabelEncoder(),
@@ -22,26 +24,35 @@ class ThreatDataset:
         }
         self._fit_encoders()
 
-    def _load_data(self):
-        """Loads JSONL data."""
-        data = []
-        try:
-            with open(self.data_path, 'r', encoding='utf-8') as f:
-                total_lines = sum(1 for _ in f)
-        except Exception:
-            total_lines = None
-
-        with open(self.data_path, 'r', encoding='utf-8') as f:
-            for line in tqdm(f, total=total_lines, desc=f"Loading {os.path.basename(self.data_path)}"):
-                if line.strip():
-                    data.append(json.loads(line))
-        return data
-
     def _fit_encoders(self):
         """Fits label encoders on the dataset."""
-        threats = [str(x['is_threat']).lower() for x in self.raw_data]
-        categories = [x.get('category', 'unknown') for x in self.raw_data]
-        subcats = [x.get('sub-category', 'unknown') for x in self.raw_data]
+        # Accessing columns triggers memory mapping reads, which is efficient
+        print("Fitting encoders...")
+        
+        # We need to extract lists to fit encoders. this loads columns into RAM temporarily
+        # but one column at a time is better than the whole dataset.
+        
+        def safe_get(batch, col):
+            return [x if x is not None else 'unknown' for x in batch[col]]
+
+        # Using batches or simple list comprehension if dataset fits in memory-mapped virt mem
+        # For simplicity and robustness, we can just access columns if not massive.
+        # If massive, we should iterate. Assuming it fits for column extraction.
+        
+        try:
+            threats = [str(self.dataset[i]['is_threat']).lower() for i in range(len(self.dataset))]
+        except KeyError:
+             # Fallback or different column name handling
+             threats = ['false'] * len(self.dataset)
+
+        # Helper to get column with default
+        def get_col_list(col_name, default='unknown'):
+            if col_name in self.dataset.column_names:
+                return [x if x is not None else default for x in self.dataset[col_name]]
+            return [default] * len(self.dataset)
+
+        categories = get_col_list('category')
+        subcats = get_col_list('sub-category')
 
         self.encoders['threat'].fit(threats + ['true', 'false'])
         self.encoders['category'].fit(categories)
@@ -61,54 +72,45 @@ class ThreatDataset:
         batch_size: int = 1000
     ) -> HFDataset:
         """Converts raw data to a tokenized Hugging Face Dataset."""
-        processed_data = {
-            "input_ids": [],
-            "attention_mask": [],
-            "labels_threat": [],
-            "labels_category": [],
-            "labels_subcategory": []
-        }
-
-        total_samples = len(self.raw_data)
-        num_batches = (total_samples + batch_size - 1) // batch_size
-
-        for i in tqdm(
-            range(0, total_samples, batch_size),
-            total=num_batches,
-            desc="Processing batches"
-        ):
-            batch = self.raw_data[i:i + batch_size]
-
-            prompts = [item['prompt'] for item in batch]
-            threats = [str(item['is_threat']).lower() for item in batch]
-            categories = [item.get('category', 'unknown') for item in batch]
-            subcats = [
-                item.get('sub-category', 'unknown') for item in batch
-            ]
-
+        
+        def process_fn(batch):
+            # Tokenize
             tokenized = tokenizer(
-                prompts,
+                batch['prompt'],
                 truncation=True,
                 padding="max_length",
                 max_length=max_length
             )
-
+            
+            # Encode labels
+            threats = [str(x).lower() for x in batch['is_threat']]
             labels_threat = self.encoders['threat'].transform(threats)
-            labels_category = self.encoders['category'].transform(categories)
-            labels_subcategory = self.encoders['subcategory'].transform(
-                subcats
-            )
+            
+            # Handle categories (list of vals)
+            cats = batch.get('category', [])
+            cats = [x if x is not None else 'unknown' for x in cats]
+            labels_category = self.encoders['category'].transform(cats)
+            
+            # Handle subcategories
+            subs = batch.get('sub-category', [])
+            subs = [x if x is not None else 'unknown' for x in subs]
+            labels_subcategory = self.encoders['subcategory'].transform(subs)
+            
+            return {
+                "input_ids": tokenized["input_ids"],
+                "attention_mask": tokenized["attention_mask"],
+                "labels_threat": labels_threat,
+                "labels_category": labels_category,
+                "labels_subcategory": labels_subcategory
+            }
 
-            processed_data["input_ids"].extend(tokenized["input_ids"])
-            processed_data["attention_mask"].extend(
-                tokenized["attention_mask"]
-            )
-            processed_data["labels_threat"].extend(labels_threat.tolist())
-            processed_data["labels_category"].extend(
-                labels_category.tolist()
-            )
-            processed_data["labels_subcategory"].extend(
-                labels_subcategory.tolist()
-            )
-
-        return HFDataset.from_dict(processed_data).with_format("torch")
+        # Apply mapping
+        processed = self.dataset.map(
+            process_fn,
+            batched=True,
+            batch_size=batch_size,
+            remove_columns=self.dataset.column_names,
+            desc="Tokenizing and processing dataset"
+        )
+        
+        return processed.with_format("torch")

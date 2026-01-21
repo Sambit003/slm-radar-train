@@ -18,7 +18,7 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 from src.utils.config import ModelArguments, DataArguments
-from src.utils.device import get_device
+from src.utils.device import get_device, get_device_type
 from src.utils.trainer import MultiHeadTrainer
 from src.utils.metrics import compute_metrics
 from src.model.modeling import GemmaMultiHeadClassifier
@@ -172,14 +172,17 @@ def main():
         num_subcategories=num_subcats
     )
 
-    if str(device).startswith("xla"):
-        training_args.optim = "adamw_torch"
-        training_args.dataloader_pin_memory = False
-        logger.info("TPU detected: using adamw_torch optimizer")
+    # Device-specific optimizations
+    device_type = get_device_type()
+    if device_type == "cuda":
+        training_args.dataloader_pin_memory = True
+        logger.info("GPU detected: enabling pin_memory for dataloaders")
 
+    # Gradient checkpointing with proper kwargs
     if data_args.use_gradient_checkpointing:
         training_args.gradient_checkpointing = True
-        logger.info("Gradient Checkpointing ENABLED")
+        training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
+        logger.info("Gradient Checkpointing ENABLED (use_reentrant=False)")
 
     # 5. Trainer
     trainer = MultiHeadTrainer(
