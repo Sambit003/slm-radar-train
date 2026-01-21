@@ -8,3 +8,4 @@ accelerate
 numpy
 pandas
 tqdm
+mlflow

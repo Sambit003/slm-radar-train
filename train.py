@@ -2,19 +2,21 @@ import os
 import sys
 import logging
 
-import torch
+import mlflow
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     TrainingArguments,
     HfArgumentParser,
-    set_seed
+    set_seed,
+    EarlyStoppingCallback
 )
 from peft import LoraConfig, get_peft_model, TaskType
 
 from src.utils.config import ModelArguments, DataArguments
 from src.utils.device import get_device
 from src.utils.trainer import MultiHeadTrainer
+from src.utils.metrics import compute_metrics
 from src.model.modeling import GemmaMultiHeadClassifier
 from src.data.dataset import ThreatDataset
 
@@ -46,6 +48,11 @@ def main():
     device = get_device()
     set_seed(training_args.seed)
     logger.info(f"Training on device: {device}")
+
+    # Set MLFlow Experiment
+    if "mlflow" in training_args.report_to or training_args.report_to == "all":
+        mlflow.set_experiment(data_args.mlflow_experiment)
+        logger.info(f"MLflow Experiment set to: {data_args.mlflow_experiment}")
 
     # 1. Load Data
     logger.info(f"Loading data from {data_args.dataset_path}")
@@ -147,6 +154,41 @@ def main():
     logger.info(f"Saving model to {training_args.output_dir}")
     model.save_pretrained(training_args.output_dir)
     tokenizer.save_pretrained(training_args.output_dir)
+
+    # Create & Save Model Card
+    model_card = f"""---
+language: en
+tags:
+- gemma
+- threat-detection
+- classification
+- slm-radar
+metrics:
+- accuracy
+- f1
+---
+
+# SLM Radar: Gemma-3 Threat Classifier
+
+Fine-tuned Gemma-3-270M for multi-head classification:
+1. **Threat Detection** (Safe/Unsafe)
+2. **Category** (Harm Category)
+3. **Subcategory** (Specific Harm Type)
+
+## Performance
+- **Threat Accuracy**: {trainer.state.log_history[-1].get('eval_threat_accuracy', 'N/A')}
+- **Threat F1**: {trainer.state.log_history[-1].get('eval_threat_f1', 'N/A')}
+- **Combined Accuracy**: {trainer.state.log_history[-1].get('eval_combined_accuracy', 'N/A')}
+
+## Training Config
+- **Epochs**: {training_args.num_train_epochs}
+- **Batch Size**: {training_args.per_device_train_batch_size}
+- **Gradient Checkpointing**: {training_args.gradient_checkpointing}
+"""
+    with open(os.path.join(training_args.output_dir, "README.md"), "w") as f:
+        f.write(model_card)
+
+    logger.info("Model Card generated.")
 
 
 if __name__ == "__main__":

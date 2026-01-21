@@ -47,3 +47,11 @@ class DataArguments:
         default=0.1,
         metadata={"help": "Proportion of dataset for final test."}
     )
+    use_gradient_checkpointing: bool = field(
+        default=True,
+        metadata={"help": "Use gradient checkpointing to save memory."}
+    )
+    mlflow_experiment: str = field(
+        default="slm-radar-finetune",
+        metadata={"help": "MLflow experiment name."}
+    )
