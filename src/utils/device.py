@@ -1,5 +1,5 @@
 import logging
-
+import torch_xla.core.xla_model as xm 
 import torch
 
 
@@ -11,11 +11,10 @@ def get_device() -> torch.device:
         torch.device: The selected device.
     """
     try:
-        import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         logging.info(f"Using TPU: {device}")
         return device
-    except ImportError:
+    except (ImportError, AttributeError, Exception):
         pass
 
     if torch.cuda.is_available():

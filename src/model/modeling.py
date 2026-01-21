@@ -32,6 +32,19 @@ class GemmaMultiHeadClassifier(nn.Module):
         # Loss function
         self.loss_fct = nn.CrossEntropyLoss()
 
+    @property
+    def device(self):
+        """Return the device of the model."""
+        return next(self.parameters()).device
+
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        """Forward gradient checkpointing enable to the backbone."""
+        self.backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+
+    def gradient_checkpointing_disable(self):
+        """Forward gradient checkpointing disable to the backbone."""
+        self.backbone.gradient_checkpointing_disable()
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,

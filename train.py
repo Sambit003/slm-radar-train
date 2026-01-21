@@ -58,6 +58,13 @@ def main():
         "labels_threat", "labels_category", "labels_subcategory"
     ]
 
+    # Metric for Best Model (Early Stopping)
+    training_args.metric_for_best_model = "eval_loss"
+    training_args.load_best_model_at_end = True
+    training_args.greater_is_better = False
+    training_args.eval_strategy = "epoch"
+    training_args.save_strategy = "epoch"
+
     # Set MLFlow Experiment
     if "mlflow" in training_args.report_to or training_args.report_to == "all":
         mlflow.set_experiment(data_args.mlflow_experiment)
@@ -146,7 +153,7 @@ def main():
         "gate_proj", "up_proj", "down_proj"
     ]
     peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
+        task_type=TaskType.FEATURE_EXTRACTION,
         inference_mode=False,
         r=model_args.lora_r,
         lora_alpha=model_args.lora_alpha,
