@@ -36,12 +36,10 @@ class MultiHeadTrainer(Trainer):
         )
 
         loss = outputs[0]
-        
+
         if loss is not None:
             loss = loss.float()
-            if torch.isnan(loss) or torch.isinf(loss):
-                loss = torch.tensor(0.1, device=loss.device, dtype=torch.float32, requires_grad=True)
-        
+
         return (loss, outputs) if return_outputs else loss
 
     def training_step(self, model, inputs, num_items_in_batch=None):

@@ -18,12 +18,13 @@ class LabelSmoothingCrossEntropy(nn.Module):
         # Ensure logits are fp32 for numerical stability
         logits = logits.float()
         targets = targets.long()
-        
-        if self.smoothing == 0.0:
-            return F.cross_entropy(logits, targets, reduction=self.reduction)
 
         n_classes = logits.size(-1)
-        
+
+        # If only one class or no smoothing, fall back to standard CE to avoid div-by-zero
+        if self.smoothing == 0.0 or n_classes <= 1:
+            return F.cross_entropy(logits, targets, reduction=self.reduction)
+
         logits = torch.clamp(logits, min=-100, max=100)
         log_probs = F.log_softmax(logits, dim=-1)
 
@@ -157,10 +158,6 @@ class GemmaMultiHeadClassifier(nn.Module):
             
             # Keep loss in float32 for numerical stability with fp16 training
             loss = (loss_t + loss_c + loss_s).float()
-            
-            # Add a small epsilon to prevent exactly zero loss which can cause NaN gradients
-            if loss.item() == 0.0:
-                loss = loss + 1e-8
 
         output = (logits_threat, logits_category, logits_subcategory)
         if loss is not None:
