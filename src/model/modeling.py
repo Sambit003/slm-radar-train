@@ -17,11 +17,14 @@ class LabelSmoothingCrossEntropy(nn.Module):
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         # Ensure logits are fp32 for numerical stability
         logits = logits.float()
+        targets = targets.long()
         
         if self.smoothing == 0.0:
             return F.cross_entropy(logits, targets, reduction=self.reduction)
 
         n_classes = logits.size(-1)
+        
+        logits = torch.clamp(logits, min=-100, max=100)
         log_probs = F.log_softmax(logits, dim=-1)
 
         # Create smoothed targets
@@ -143,10 +146,21 @@ class GemmaMultiHeadClassifier(nn.Module):
                 loss_fn = self.loss_fct
 
             # Ensure inputs to loss function are float32 to prevent overflow/NaN in FP16
+            # Also ensure labels are on the same device and are long tensors
+            labels_threat = labels_threat.long()
+            labels_category = labels_category.long()
+            labels_subcategory = labels_subcategory.long()
+            
             loss_t = loss_fn(logits_threat.float(), labels_threat) * self.loss_weights[0]
             loss_c = loss_fn(logits_category.float(), labels_category) * self.loss_weights[1]
             loss_s = loss_fn(logits_subcategory.float(), labels_subcategory) * self.loss_weights[2]
-            loss = loss_t + loss_c + loss_s
+            
+            # Keep loss in float32 for numerical stability with fp16 training
+            loss = (loss_t + loss_c + loss_s).float()
+            
+            # Add a small epsilon to prevent exactly zero loss which can cause NaN gradients
+            if loss.item() == 0.0:
+                loss = loss + 1e-8
 
         output = (logits_threat, logits_category, logits_subcategory)
         if loss is not None:
