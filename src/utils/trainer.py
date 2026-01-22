@@ -38,7 +38,7 @@ class MultiHeadTrainer(Trainer):
         loss = outputs[0]
 
         if loss is not None:
-            loss = loss.float()
+            loss = loss.half()
 
         return (loss, outputs) if return_outputs else loss
 
