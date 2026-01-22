@@ -91,6 +91,13 @@ def main():
 
     # Set MLFlow Experiment
     if "mlflow" in training_args.report_to or training_args.report_to == "all":
+        # Enable System Metrics Logging
+        try:
+            mlflow.enable_system_metrics_logging()
+            logger.info("MLflow System Metrics Logging Enabled")
+        except AttributeError:
+            logger.warning("mlflow.enable_system_metrics_logging() not found (update mlflow?)")
+
         mlflow.set_experiment(data_args.mlflow_experiment)
         logger.info(f"MLflow Experiment set to: {data_args.mlflow_experiment}")
 
