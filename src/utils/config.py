@@ -25,6 +25,10 @@ class ModelArguments:
         default=0.05,
         metadata={"help": "LoRA dropout"}
     )
+    gpu_type: str = field(
+        default=None,
+        metadata={"help": "GPU type for hardware specific optimizations (e.g., 'nvidia-t4')"}
+    )
 
 
 @dataclass

@@ -48,6 +48,11 @@ def main():
             parser.parse_args_into_dataclasses()
         )
 
+    if model_args.gpu_type == "nvidia-t4":
+        logger.info("Detected 'nvidia-t4' GPU type. Forcing FP16 and disabling BF16.")
+        training_args.fp16 = True
+        training_args.bf16 = False
+
     # Detect Device and Set Seed
     device = get_device()
     set_seed(training_args.seed)
@@ -158,8 +163,13 @@ def main():
     )
 
     logger.info(f"Loading base model: {model_args.model_name_or_path}")
-    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    dtype = torch.bfloat16 if use_bf16 else torch.float32
+    
+    if training_args.fp16:
+        dtype = torch.float16
+    else:
+        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        dtype = torch.bfloat16 if use_bf16 else torch.float32
+        
     base_model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         torch_dtype=dtype,
