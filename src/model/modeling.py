@@ -3,41 +3,6 @@ from typing import Optional, Tuple, Dict, Union
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
-class LabelSmoothingCrossEntropy(nn.Module):
-    """Cross entropy loss with label smoothing for training stability."""
-
-    def __init__(self, smoothing: float = 0.0, reduction: str = "mean"):
-        super().__init__()
-        self.smoothing = smoothing
-        self.reduction = reduction
-
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        # Ensure logits are fp16 for numerical stability
-        logits = logits.half()
-        targets = targets.long()
-
-        n_classes = logits.size(-1)
-
-        logits = torch.clamp(logits, min=-100, max=100)
-        log_probs = F.log_softmax(logits, dim=-1)
-
-        # Create smoothed targets
-        with torch.no_grad():
-            smooth_targets = torch.zeros_like(log_probs)
-            smooth_targets.fill_(self.smoothing / (n_classes - 1))
-            smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.smoothing)
-
-        loss = (-smooth_targets * log_probs).sum(dim=-1)
-
-        if self.reduction == "mean":
-            return loss.mean()
-        elif self.reduction == "sum":
-            return loss.sum()
-        return loss
-
 
 class GemmaMultiHeadClassifier(nn.Module):
     """
@@ -45,10 +10,6 @@ class GemmaMultiHeadClassifier(nn.Module):
     - Threat Detection (Binary)
     - Category Classification (Multi-class)
     - Sub-category Classification (Multi-class)
-
-    Includes training stabilization features:
-    - Label smoothing support
-    - Weighted loss for imbalanced heads
     """
 
     def __init__(
@@ -64,7 +25,7 @@ class GemmaMultiHeadClassifier(nn.Module):
         hidden_size = self.config.hidden_size
         self.loss_weights = loss_weights
 
-        # Classification Heads with optional dropout for regularization
+        # Classification Heads
         self.head_dropout = nn.Dropout(p=0.1)
         self.threat_head = nn.Linear(hidden_size, 2)
         self.category_head = nn.Linear(hidden_size, num_categories)
@@ -74,9 +35,6 @@ class GemmaMultiHeadClassifier(nn.Module):
         self.threat_head.to(self.backbone.dtype)
         self.category_head.to(self.backbone.dtype)
         self.subcategory_head.to(self.backbone.dtype)
-
-        # Default loss function (can be overridden in forward with label_smoothing)
-        self.loss_fct = nn.CrossEntropyLoss()
 
     @property
     def device(self):
@@ -130,30 +88,14 @@ class GemmaMultiHeadClassifier(nn.Module):
         logits_subcategory = self.subcategory_head(pooled_output)
 
         loss = None
-        all_labels_present = (
-            labels_threat is not None
-            and labels_category is not None
-            and labels_subcategory is not None
-        )
-        if all_labels_present:
-            # Use label smoothing loss if specified
-            if label_smoothing > 0.0:
-                loss_fn = LabelSmoothingCrossEntropy(smoothing=label_smoothing)
-            else:
-                loss_fn = self.loss_fct
+        if labels_threat is not None and labels_category is not None and labels_subcategory is not None:
+            loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
-            # Ensure inputs to loss function are float32 to prevent overflow/NaN in FP16
-            # Also ensure labels are on the same device and are long tensors
-            labels_threat = labels_threat.long()
-            labels_category = labels_category.long()
-            labels_subcategory = labels_subcategory.long()
-            
-            loss_t = loss_fn(logits_threat.half(), labels_threat) * self.loss_weights[0]
-            loss_c = loss_fn(logits_category.half(), labels_category) * self.loss_weights[1]
-            loss_s = loss_fn(logits_subcategory.half(), labels_subcategory) * self.loss_weights[2]
-            
-            # Keep loss in fp16 for numerical stability with fp16 training
-            loss = (loss_t + loss_c + loss_s).half()
+            loss_t = loss_fn(logits_threat.float(), labels_threat.long()) * self.loss_weights[0]
+            loss_c = loss_fn(logits_category.float(), labels_category.long()) * self.loss_weights[1]
+            loss_s = loss_fn(logits_subcategory.float(), labels_subcategory.long()) * self.loss_weights[2]
+
+            loss = loss_t + loss_c + loss_s
 
         output = (logits_threat, logits_category, logits_subcategory)
         if loss is not None:
@@ -161,12 +103,9 @@ class GemmaMultiHeadClassifier(nn.Module):
         return output
 
     def save_pretrained(self, save_directory: str):
-        """Saves the model backbone and head weights."""
         if not os.path.exists(save_directory):
             os.makedirs(save_directory)
-
         self.backbone.save_pretrained(save_directory)
-
         heads_state = {
             'threat_head': self.threat_head.state_dict(),
             'category_head': self.category_head.state_dict(),
