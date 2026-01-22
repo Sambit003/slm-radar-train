@@ -55,6 +55,10 @@ class DataArguments:
         default=True,
         metadata={"help": "Use gradient checkpointing to save memory."}
     )
+    disable_gradient_checkpointing: bool = field(
+        default=False,
+        metadata={"help": "Disable gradient checkpointing and force use_cache=True."}
+    )
     mlflow_experiment: str = field(
         default="slm-radar-finetune",
         metadata={"help": "MLflow experiment name."}

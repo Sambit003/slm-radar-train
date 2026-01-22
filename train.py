@@ -208,7 +208,11 @@ def main():
         logger.info("GPU detected: enabling pin_memory for dataloaders")
 
     # Gradient checkpointing with proper kwargs
-    if data_args.use_gradient_checkpointing:
+    if data_args.disable_gradient_checkpointing:
+        training_args.gradient_checkpointing = False
+        base_model.config.use_cache = True
+        logger.info("Gradient Checkpointing DISABLED. use_cache=True FORCED.")
+    elif data_args.use_gradient_checkpointing:
         training_args.gradient_checkpointing = True
         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
         logger.info("Gradient Checkpointing ENABLED (use_reentrant=False)")
