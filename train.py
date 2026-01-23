@@ -176,7 +176,7 @@ def main():
 
     logger.info(f"Loading base model: {model_args.model_name_or_path}")
     
-    if training_args.fp32:
+    if model_args.fp32:
         dtype = torch.float32
     else:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()

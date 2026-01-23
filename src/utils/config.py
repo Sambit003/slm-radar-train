@@ -29,6 +29,10 @@ class ModelArguments:
         default=None,
         metadata={"help": "GPU type for hardware specific optimizations (e.g., 'nvidia-t4')"}
     )
+    fp32: bool = field(
+        default=False,
+        metadata={"help": "Whether to use fp32 mode."}
+    )
 
 
 @dataclass
