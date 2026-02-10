@@ -144,8 +144,16 @@ class ThreatDataset:
                 minlength=num_classes
             ).astype(np.float32)
             total = counts.sum()
-            weights = np.where(counts > 0, total / (num_classes * counts), 1.0)
-            return weights.astype(np.float32)
+            raw = np.where(
+                counts > 0,
+                total / (num_classes * counts),
+                1.0
+            )
+            # Sqrt-dampen to avoid extreme weights
+            weights = np.sqrt(raw).astype(np.float32)
+            # Normalize so mean weight = 1.0
+            weights = weights / weights.mean()
+            return weights
 
         threat_weights = compute_weights(
             threat_labels,

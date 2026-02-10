@@ -89,14 +89,7 @@ def main():
     training_args.eval_strategy = "epoch"
     training_args.save_strategy = "epoch"
     training_args.max_grad_norm = 1.0
-    training_args.warmup_ratio = 0.03
     training_args.lr_scheduler_type = "cosine"
-    if (
-        not hasattr(training_args, "weight_decay")
-        or training_args.weight_decay == 0
-    ):
-        training_args.weight_decay = 0.001
-    training_args.label_smoothing_factor = 0.05
 
     logger.info(
         "Training Stabilization: max_grad_norm=%s, warmup_ratio=%s, "
@@ -164,10 +157,22 @@ def main():
     threat_dataset.save_encoders(training_args.output_dir)
 
     # Class weights for imbalance handling
-    threat_w, category_w, subcategory_w = threat_dataset.get_class_weights()
+    threat_w, category_w, subcategory_w = (
+        threat_dataset.get_class_weights()
+    )
+    logger.info(
+        "Class weight stats — threat: min=%.2f max=%.2f, "
+        "category: min=%.2f max=%.2f, "
+        "subcategory: min=%.2f max=%.2f",
+        threat_w.min(), threat_w.max(),
+        category_w.min(), category_w.max(),
+        subcategory_w.min(), subcategory_w.max(),
+    )
     threat_w = torch.tensor(threat_w, dtype=torch.float32)
     category_w = torch.tensor(category_w, dtype=torch.float32)
-    subcategory_w = torch.tensor(subcategory_w, dtype=torch.float32)
+    subcategory_w = torch.tensor(
+        subcategory_w, dtype=torch.float32
+    )
 
     # 2. Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -229,10 +234,23 @@ def main():
 
     num_cats = len(threat_dataset.encoders['category'].classes_)
     num_subcats = len(threat_dataset.encoders['subcategory'].classes_)
+
+    # Scale head losses inversely with class count so
+    # multi-class heads don't dominate the total loss.
+    w_threat = 1.0
+    w_cat = 2.0 / num_cats if num_cats > 2 else 1.0
+    w_subcat = 2.0 / num_subcats if num_subcats > 2 else 1.0
+    logger.info(
+        "Loss head weights: threat=%.4f, category=%.4f, "
+        "subcategory=%.4f",
+        w_threat, w_cat, w_subcat
+    )
+
     model = GemmaMultiHeadClassifier(
         base_model,
         num_categories=num_cats,
         num_subcategories=num_subcats,
+        loss_weights=(w_threat, w_cat, w_subcat),
         threat_class_weights=threat_w,
         category_class_weights=category_w,
         subcategory_class_weights=subcategory_w
