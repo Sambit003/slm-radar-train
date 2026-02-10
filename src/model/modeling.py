@@ -4,6 +4,7 @@ from typing import Optional, Tuple, Dict, Union
 import torch
 import torch.nn as nn
 
+
 class GemmaMultiHeadClassifier(nn.Module):
     """
     Multi-head classifier for Gemma-3 with three outputs:
@@ -17,13 +18,40 @@ class GemmaMultiHeadClassifier(nn.Module):
         base_model: nn.Module,
         num_categories: int,
         num_subcategories: int,
-        loss_weights: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+        loss_weights: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+        threat_class_weights: Optional[torch.Tensor] = None,
+        category_class_weights: Optional[torch.Tensor] = None,
+        subcategory_class_weights: Optional[torch.Tensor] = None
     ):
         super().__init__()
         self.backbone = base_model
         self.config = base_model.config
         hidden_size = self.config.hidden_size
         self.loss_weights = loss_weights
+
+        if threat_class_weights is not None:
+            self.register_buffer(
+                "threat_class_weights",
+                threat_class_weights.float()
+            )
+        else:
+            self.threat_class_weights = None
+
+        if category_class_weights is not None:
+            self.register_buffer(
+                "category_class_weights",
+                category_class_weights.float()
+            )
+        else:
+            self.category_class_weights = None
+
+        if subcategory_class_weights is not None:
+            self.register_buffer(
+                "subcategory_class_weights",
+                subcategory_class_weights.float()
+            )
+        else:
+            self.subcategory_class_weights = None
 
         # Classification Heads
         self.head_dropout = nn.Dropout(p=0.1)
@@ -41,14 +69,19 @@ class GemmaMultiHeadClassifier(nn.Module):
         """Return the device of the model."""
         return next(self.parameters()).device
 
-    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+    def gradient_checkpointing_enable(
+        self,
+        gradient_checkpointing_kwargs=None
+    ):
         """Forward gradient checkpointing enable to the backbone."""
         # Use non-reentrant checkpointing to avoid XLA/device detection issues
         if gradient_checkpointing_kwargs is None:
             gradient_checkpointing_kwargs = {"use_reentrant": False}
         elif "use_reentrant" not in gradient_checkpointing_kwargs:
             gradient_checkpointing_kwargs["use_reentrant"] = False
-        self.backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+        self.backbone.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs
+        )
 
     def gradient_checkpointing_disable(self):
         """Forward gradient checkpointing disable to the backbone."""
@@ -64,7 +97,7 @@ class GemmaMultiHeadClassifier(nn.Module):
         label_smoothing: float = 0.0,
         **kwargs
     ) -> Union[Tuple[torch.Tensor, ...], Dict[str, torch.Tensor]]:
-        """Forward pass for the multi-head model with label smoothing support."""
+        """Forward pass for the multi-head model."""
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -88,12 +121,34 @@ class GemmaMultiHeadClassifier(nn.Module):
         logits_subcategory = self.subcategory_head(pooled_output)
 
         loss = None
-        if labels_threat is not None and labels_category is not None and labels_subcategory is not None:
-            loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        if (
+            labels_threat is not None
+            and labels_category is not None
+            and labels_subcategory is not None
+        ):
+            loss_t = nn.CrossEntropyLoss(
+                weight=self.threat_class_weights,
+                label_smoothing=label_smoothing
+            )(
+                logits_threat.float(),
+                labels_threat.long()
+            ) * self.loss_weights[0]
 
-            loss_t = loss_fn(logits_threat.float(), labels_threat.long()) * self.loss_weights[0]
-            loss_c = loss_fn(logits_category.float(), labels_category.long()) * self.loss_weights[1]
-            loss_s = loss_fn(logits_subcategory.float(), labels_subcategory.long()) * self.loss_weights[2]
+            loss_c = nn.CrossEntropyLoss(
+                weight=self.category_class_weights,
+                label_smoothing=label_smoothing
+            )(
+                logits_category.float(),
+                labels_category.long()
+            ) * self.loss_weights[1]
+
+            loss_s = nn.CrossEntropyLoss(
+                weight=self.subcategory_class_weights,
+                label_smoothing=label_smoothing
+            )(
+                logits_subcategory.float(),
+                labels_subcategory.long()
+            ) * self.loss_weights[2]
 
             loss = loss_t + loss_c + loss_s
 

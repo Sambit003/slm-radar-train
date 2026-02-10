@@ -1,8 +1,9 @@
 import os
 import pickle
-from typing import Optional
+from typing import Optional, Tuple
 
-from datasets import load_dataset, Dataset as HFDataset
+import numpy as np
+from datasets import load_dataset, DatasetDict
 from sklearn.preprocessing import LabelEncoder
 from transformers import PreTrainedTokenizer
 
@@ -68,7 +69,7 @@ class ThreatDataset:
         tokenizer: PreTrainedTokenizer,
         max_length: int,
         batch_size: int = 1000
-    ) -> HFDataset:
+    ) -> DatasetDict:
         """Converts raw data to a tokenized Hugging Face Dataset."""
 
         def process_fn(batch):
@@ -112,3 +113,51 @@ class ThreatDataset:
         )
 
         return processed.with_format("torch")
+
+    def get_class_weights(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute class weights from the training set."""
+        train_ds = self.dataset["train"]
+
+        threats = [str(x).lower() for x in train_ds["is_threat"]]
+        threat_labels = self.encoders["threat"].transform(threats)
+
+        if "category" in train_ds.column_names:
+            cats = train_ds["category"]
+        else:
+            cats = ["unknown"] * len(train_ds)
+        cats = [x if x is not None else "unknown" for x in cats]
+        category_labels = self.encoders["category"].transform(cats)
+
+        if "sub-category" in train_ds.column_names:
+            subs = train_ds["sub-category"]
+        else:
+            subs = ["unknown"] * len(train_ds)
+        subs = [x if x is not None else "unknown" for x in subs]
+        subcategory_labels = self.encoders["subcategory"].transform(subs)
+
+        def compute_weights(
+            labels: np.ndarray,
+            num_classes: int
+        ) -> np.ndarray:
+            counts = np.bincount(
+                labels,
+                minlength=num_classes
+            ).astype(np.float32)
+            total = counts.sum()
+            weights = np.where(counts > 0, total / (num_classes * counts), 1.0)
+            return weights.astype(np.float32)
+
+        threat_weights = compute_weights(
+            threat_labels,
+            len(self.encoders["threat"].classes_)
+        )
+        category_weights = compute_weights(
+            category_labels,
+            len(self.encoders["category"].classes_)
+        )
+        subcategory_weights = compute_weights(
+            subcategory_labels,
+            len(self.encoders["subcategory"].classes_)
+        )
+
+        return threat_weights, category_weights, subcategory_weights

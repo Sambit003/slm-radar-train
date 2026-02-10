@@ -58,7 +58,10 @@ def main():
         login(token=model_args.hf_token)
 
     if model_args.gpu_type == "nvidia-t4":
-        logger.info("Detected 'nvidia-t4' GPU type. Forcing FP16 and disabling BF16.")
+        logger.info(
+            "Detected 'nvidia-t4' GPU type. "
+            "Forcing FP16 and disabling BF16."
+        )
         training_args.fp16 = True
         training_args.bf16 = False
 
@@ -86,16 +89,23 @@ def main():
     training_args.eval_strategy = "epoch"
     training_args.save_strategy = "epoch"
     training_args.max_grad_norm = 1.0
-    training_args.warmup_ratio = 0.1
+    training_args.warmup_ratio = 0.03
     training_args.lr_scheduler_type = "cosine"
-    if not hasattr(training_args, 'weight_decay') or training_args.weight_decay == 0:
-        training_args.weight_decay = 0.01
-    training_args.label_smoothing_factor = 0.1
+    if (
+        not hasattr(training_args, "weight_decay")
+        or training_args.weight_decay == 0
+    ):
+        training_args.weight_decay = 0.001
+    training_args.label_smoothing_factor = 0.05
 
     logger.info(
-        f"Training Stabilization: max_grad_norm={training_args.max_grad_norm}, "
-        f"warmup_ratio={training_args.warmup_ratio}, lr_scheduler={training_args.lr_scheduler_type}, "
-        f"weight_decay={training_args.weight_decay}, label_smoothing={training_args.label_smoothing_factor}"
+        "Training Stabilization: max_grad_norm=%s, warmup_ratio=%s, "
+        "lr_scheduler=%s, weight_decay=%s, label_smoothing=%s",
+        training_args.max_grad_norm,
+        training_args.warmup_ratio,
+        training_args.lr_scheduler_type,
+        training_args.weight_decay,
+        training_args.label_smoothing_factor,
     )
 
     # Set MLFlow Experiment
@@ -105,14 +115,17 @@ def main():
             mlflow.enable_system_metrics_logging()
             logger.info("MLflow System Metrics Logging Enabled")
         except AttributeError:
-            logger.warning("mlflow.enable_system_metrics_logging() not found (update mlflow?)")
+            logger.warning(
+                "mlflow.enable_system_metrics_logging() not found "
+                "(update mlflow?)"
+            )
 
         mlflow.set_experiment(data_args.mlflow_experiment)
         logger.info(f"MLflow Experiment set to: {data_args.mlflow_experiment}")
 
         # Start MLflow UI and Ngrok Tunnel
         try:
-            # Check if MLflow UI is already running (simple check prevents duplicate processes)
+            # Check if MLflow UI is already running
             # This is a basic background start.
             logger.info("Starting MLflow UI in the background...")
             subprocess.Popen(
@@ -128,13 +141,19 @@ def main():
             port = 5000
             public_url = ngrok.connect(port, host_header="rewrite").public_url
             logger.info(f"Ngrok Tunnel created for port {port}")
-            print(f"\n{'='*60}\n🚀 MLflow Dashboard available at: {public_url}\n{'='*60}\n")
+            print(
+                f"\n{'='*60}\n🚀 MLflow Dashboard available at: "
+                f"{public_url}\n{'='*60}\n"
+            )
             
         except Exception as e:
-            logger.warning(f"Failed to set up Ngrok/MLflow UI automatically: {e}")
+            logger.warning(
+                "Failed to set up Ngrok/MLflow UI automatically: %s",
+                e
+            )
 
     # 1. Load Data
-    logger.info(f"Loading data...")
+    logger.info("Loading data...")
     threat_dataset = ThreatDataset(
         data_args.train_file,
         validation_file=data_args.validation_file,
@@ -143,6 +162,12 @@ def main():
 
     # Save encoders for inference usage later
     threat_dataset.save_encoders(training_args.output_dir)
+
+    # Class weights for imbalance handling
+    threat_w, category_w, subcategory_w = threat_dataset.get_class_weights()
+    threat_w = torch.tensor(threat_w, dtype=torch.float32)
+    category_w = torch.tensor(category_w, dtype=torch.float32)
+    subcategory_w = torch.tensor(subcategory_w, dtype=torch.float32)
 
     # 2. Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -207,7 +232,10 @@ def main():
     model = GemmaMultiHeadClassifier(
         base_model,
         num_categories=num_cats,
-        num_subcategories=num_subcats
+        num_subcategories=num_subcats,
+        threat_class_weights=threat_w,
+        category_class_weights=category_w,
+        subcategory_class_weights=subcategory_w
     )
 
     # Device-specific optimizations
@@ -241,12 +269,26 @@ def main():
     logger.info("Starting training...")
     trainer.train()
 
+    if test_ds is not None:
+        logger.info("Running final evaluation on test set")
+        test_metrics = trainer.evaluate(eval_dataset=test_ds)
+        trainer.log_metrics("test", test_metrics)
+        trainer.save_metrics("test", test_metrics)
+
     # 7. Save
     logger.info(f"Saving model to {training_args.output_dir}")
     model.save_pretrained(training_args.output_dir)
     tokenizer.save_pretrained(training_args.output_dir)
 
     # Create & Save Model Card
+    threat_acc = trainer.state.log_history[-1].get(
+        "eval_threat_accuracy",
+        "N/A"
+    )
+    combined_acc = trainer.state.log_history[-1].get(
+        "eval_combined_accuracy",
+        "N/A"
+    )
     model_card = f"""---
 language: en
 tags:
@@ -267,9 +309,9 @@ Fine-tuned Gemma-3-270M for multi-head classification:
 3. **Subcategory** (Specific Harm Type)
 
 ## Performance
-- **Threat Accuracy**: {trainer.state.log_history[-1].get('eval_threat_accuracy', 'N/A')}
+- **Threat Accuracy**: {threat_acc}
 - **Threat F1**: {trainer.state.log_history[-1].get('eval_threat_f1', 'N/A')}
-- **Combined Accuracy**: {trainer.state.log_history[-1].get('eval_combined_accuracy', 'N/A')}
+- **Combined Accuracy**: {combined_acc}
 
 ## Training Config
 - **Epochs**: {training_args.num_train_epochs}
