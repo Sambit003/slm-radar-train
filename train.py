@@ -7,6 +7,7 @@ import time
 
 import mlflow
 from pyngrok import ngrok
+from huggingface_hub import login
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -52,6 +53,9 @@ def main():
         model_args, data_args, training_args = (
             parser.parse_args_into_dataclasses()
         )
+
+    if model_args.hf_token:
+        login(token=model_args.hf_token)
 
     if model_args.gpu_type == "nvidia-t4":
         logger.info("Detected 'nvidia-t4' GPU type. Forcing FP16 and disabling BF16.")
@@ -130,8 +134,12 @@ def main():
             logger.warning(f"Failed to set up Ngrok/MLflow UI automatically: {e}")
 
     # 1. Load Data
-    logger.info(f"Loading data from {data_args.dataset_path}")
-    threat_dataset = ThreatDataset(data_args.dataset_path)
+    logger.info(f"Loading data...")
+    threat_dataset = ThreatDataset(
+        data_args.train_file,
+        validation_file=data_args.validation_file,
+        test_file=data_args.test_file
+    )
 
     # Save encoders for inference usage later
     threat_dataset.save_encoders(training_args.output_dir)
@@ -152,27 +160,16 @@ def main():
         data_args.max_seq_length
     )
 
-    # Split: train / val / test (3-way)
-    test_val_size = data_args.val_size + data_args.test_size
-    temp_split = hf_dataset.train_test_split(
-        test_size=test_val_size,
-        seed=training_args.seed
-    )
-    train_ds = temp_split["train"]
+    # Get splits from the processed DatasetDict
+    train_ds = hf_dataset['train']
+    eval_ds = hf_dataset.get('validation')
+    test_ds = hf_dataset.get('test')
 
-    # Split remaining into val and test
-    val_test_ratio = data_args.test_size / test_val_size
-    val_test_split = temp_split["test"].train_test_split(
-        test_size=val_test_ratio,
-        seed=training_args.seed
-    )
-    eval_ds = val_test_split["train"]  # validation
-    test_ds = val_test_split["test"]   # held-out test
-
-    logger.info(
-        f"Dataset splits - Train: {len(train_ds)}, "
-        f"Val: {len(eval_ds)}, Test: {len(test_ds)}"
-    )
+    logger.info(f"Dataset splits - Train: {len(train_ds)}")
+    if eval_ds:
+        logger.info(f"Val: {len(eval_ds)}")
+    if test_ds:
+        logger.info(f"Test: {len(test_ds)}")
 
     logger.info(f"Loading base model: {model_args.model_name_or_path}")
     

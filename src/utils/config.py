@@ -39,21 +39,21 @@ class ModelArguments:
 class DataArguments:
     """Arguments for input data configuration."""
 
-    dataset_path: str = field(
+    train_file: str = field(
         default=None,
-        metadata={"help": "Path to dataset file (jsonl)."}
+        metadata={"help": "Path to training dataset file (jsonl)."}
+    )
+    validation_file: str = field(
+        default=None,
+        metadata={"help": "Path to validation dataset file (jsonl)."}
+    )
+    test_file: str = field(
+        default=None,
+        metadata={"help": "Path to test dataset file (jsonl)."}
     )
     max_seq_length: int = field(
         default=512,
         metadata={"help": "Max input sequence length after tokenization."}
-    )
-    val_size: float = field(
-        default=0.1,
-        metadata={"help": "Proportion of dataset for validation."}
-    )
-    test_size: float = field(
-        default=0.1,
-        metadata={"help": "Proportion of dataset for final test."}
     )
     use_gradient_checkpointing: bool = field(
         default=True,
