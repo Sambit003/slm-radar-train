@@ -259,7 +259,8 @@ def main():
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=7,
+                                         early_stopping_threshold=0.0)],
         label_smoothing=training_args.label_smoothing_factor
     )
 
