@@ -220,8 +220,8 @@ def main():
     # Scale head losses inversely with class count so
     # multi-class heads don't dominate the total loss.
     w_threat = 1.0
-    w_cat = 2.0 / num_cats if num_cats > 2 else 1.0
-    w_subcat = 2.0 / num_subcats if num_subcats > 2 else 1.0
+    w_cat = 1.0
+    w_subcat = 1.0
     logger.info(
         "Loss head weights: threat=%.4f, category=%.4f, "
         "subcategory=%.4f",
