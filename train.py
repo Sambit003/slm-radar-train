@@ -156,24 +156,6 @@ def main():
     # Save encoders for inference usage later
     threat_dataset.save_encoders(training_args.output_dir)
 
-    # Class weights for imbalance handling
-    threat_w, category_w, subcategory_w = (
-        threat_dataset.get_class_weights()
-    )
-    logger.info(
-        "Class weight stats — threat: min=%.2f max=%.2f, "
-        "category: min=%.2f max=%.2f, "
-        "subcategory: min=%.2f max=%.2f",
-        threat_w.min(), threat_w.max(),
-        category_w.min(), category_w.max(),
-        subcategory_w.min(), subcategory_w.max(),
-    )
-    threat_w = torch.tensor(threat_w, dtype=torch.float32)
-    category_w = torch.tensor(category_w, dtype=torch.float32)
-    subcategory_w = torch.tensor(
-        subcategory_w, dtype=torch.float32
-    )
-
     # 2. Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
@@ -251,9 +233,7 @@ def main():
         num_categories=num_cats,
         num_subcategories=num_subcats,
         loss_weights=(w_threat, w_cat, w_subcat),
-        threat_class_weights=threat_w,
-        category_class_weights=category_w,
-        subcategory_class_weights=subcategory_w
+        focal_gamma=2.0,
     )
 
     # Device-specific optimizations

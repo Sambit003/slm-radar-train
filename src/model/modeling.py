@@ -3,6 +3,25 @@ from typing import Optional, Tuple, Dict, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+def focal_loss(
+    logits: torch.Tensor,
+    targets: torch.LongTensor,
+    gamma: float = 2.0,
+    label_smoothing: float = 0.0,
+) -> torch.Tensor:
+    """Focal loss: down-weights easy examples."""
+    ce = F.cross_entropy(
+        logits, targets,
+        reduction="none",
+        label_smoothing=label_smoothing,
+    )
+    p = F.softmax(logits.detach(), dim=-1)
+    p_t = p.gather(1, targets.unsqueeze(1)).squeeze(1)
+    focal_weight = (1.0 - p_t) ** gamma
+    return (focal_weight * ce).mean()
 
 
 class GemmaMultiHeadClassifier(nn.Module):
@@ -18,46 +37,25 @@ class GemmaMultiHeadClassifier(nn.Module):
         base_model: nn.Module,
         num_categories: int,
         num_subcategories: int,
-        loss_weights: Tuple[float, float, float] = (1.0, 1.0, 1.0),
-        threat_class_weights: Optional[torch.Tensor] = None,
-        category_class_weights: Optional[torch.Tensor] = None,
-        subcategory_class_weights: Optional[torch.Tensor] = None
+        loss_weights: Tuple[float, ...] = (1.0, 1.0, 1.0),
+        focal_gamma: float = 2.0,
     ):
         super().__init__()
         self.backbone = base_model
         self.config = base_model.config
         hidden_size = self.config.hidden_size
         self.loss_weights = loss_weights
-
-        if threat_class_weights is not None:
-            self.register_buffer(
-                "threat_class_weights",
-                threat_class_weights.float()
-            )
-        else:
-            self.threat_class_weights = None
-
-        if category_class_weights is not None:
-            self.register_buffer(
-                "category_class_weights",
-                category_class_weights.float()
-            )
-        else:
-            self.category_class_weights = None
-
-        if subcategory_class_weights is not None:
-            self.register_buffer(
-                "subcategory_class_weights",
-                subcategory_class_weights.float()
-            )
-        else:
-            self.subcategory_class_weights = None
+        self.focal_gamma = focal_gamma
 
         # Classification Heads
         self.head_dropout = nn.Dropout(p=0.1)
         self.threat_head = nn.Linear(hidden_size, 2)
-        self.category_head = nn.Linear(hidden_size, num_categories)
-        self.subcategory_head = nn.Linear(hidden_size, num_subcategories)
+        self.category_head = nn.Linear(
+            hidden_size, num_categories
+        )
+        self.subcategory_head = nn.Linear(
+            hidden_size, num_subcategories
+        )
 
         # Cast heads to the same dtype as the backbone
         self.threat_head.to(self.backbone.dtype)
@@ -126,28 +124,25 @@ class GemmaMultiHeadClassifier(nn.Module):
             and labels_category is not None
             and labels_subcategory is not None
         ):
-            loss_t = nn.CrossEntropyLoss(
-                weight=self.threat_class_weights,
-                label_smoothing=label_smoothing
-            )(
+            loss_t = focal_loss(
                 logits_threat.float(),
-                labels_threat.long()
+                labels_threat.long(),
+                gamma=self.focal_gamma,
+                label_smoothing=label_smoothing,
             ) * self.loss_weights[0]
 
-            loss_c = nn.CrossEntropyLoss(
-                weight=self.category_class_weights,
-                label_smoothing=label_smoothing
-            )(
+            loss_c = focal_loss(
                 logits_category.float(),
-                labels_category.long()
+                labels_category.long(),
+                gamma=self.focal_gamma,
+                label_smoothing=label_smoothing,
             ) * self.loss_weights[1]
 
-            loss_s = nn.CrossEntropyLoss(
-                weight=self.subcategory_class_weights,
-                label_smoothing=label_smoothing
-            )(
+            loss_s = focal_loss(
                 logits_subcategory.float(),
-                labels_subcategory.long()
+                labels_subcategory.long(),
+                gamma=self.focal_gamma,
+                label_smoothing=label_smoothing,
             ) * self.loss_weights[2]
 
             loss = loss_t + loss_c + loss_s
