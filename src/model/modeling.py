@@ -15,6 +15,10 @@ def focal_loss(
     weight: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Focal loss: down-weights easy examples."""
+
+    if weight is not None:
+        weight = weight.to(logits.dtype)
+
     ce = F.cross_entropy(
         logits, targets,
         reduction="none",
