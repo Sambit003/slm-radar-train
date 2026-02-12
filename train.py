@@ -198,21 +198,49 @@ def main():
         token=model_args.hf_token
     ).model
 
-    target_modules = [
-        "q_proj", "v_proj", "k_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj"
-    ]
-    peft_config = LoraConfig(
-        task_type=TaskType.FEATURE_EXTRACTION,
-        inference_mode=False,
-        r=model_args.lora_r,
-        lora_alpha=model_args.lora_alpha,
-        lora_dropout=model_args.lora_dropout,
-        target_modules=target_modules
-    )
+    finetune_mode = (model_args.finetune_mode or "lora").lower().strip()
+    if finetune_mode not in {"lora", "full"}:
+        raise ValueError(
+            "Invalid --finetune_mode. Expected one of: 'lora', 'full'. "
+            f"Got: {model_args.finetune_mode!r}"
+        )
 
-    base_model = get_peft_model(base_model, peft_config)
-    base_model.print_trainable_parameters()
+    if finetune_mode == "lora":
+        if model_args.lora_r is None or model_args.lora_r <= 0:
+            raise ValueError(
+                "When finetune_mode='lora', --lora_r must be > 0. "
+                f"Got: {model_args.lora_r}"
+            )
+
+        target_modules = [
+            "q_proj", "v_proj", "k_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj"
+        ]
+        peft_config = LoraConfig(
+            task_type=TaskType.FEATURE_EXTRACTION,
+            inference_mode=False,
+            r=model_args.lora_r,
+            lora_alpha=model_args.lora_alpha,
+            lora_dropout=model_args.lora_dropout,
+            target_modules=target_modules
+        )
+
+        base_model = get_peft_model(base_model, peft_config)
+        base_model.print_trainable_parameters()
+    else:
+        # Full fine-tuning: ensure the entire backbone is trainable.
+        base_model.requires_grad_(True)
+        total = sum(p.numel() for p in base_model.parameters())
+        trainable = sum(
+            p.numel() for p in base_model.parameters() if p.requires_grad
+        )
+        logger.info(
+            "Full fine-tuning enabled: trainable backbone params=%s/%s "
+            "(%.2f%%)",
+            trainable,
+            total,
+            100.0 * (trainable / max(total, 1)),
+        )
 
     num_cats = len(threat_dataset.encoders['category'].classes_)
     num_subcats = len(threat_dataset.encoders['subcategory'].classes_)

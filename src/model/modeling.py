@@ -1,5 +1,6 @@
+import json
 import os
-from typing import Optional, Tuple, Dict, Union
+from typing import Optional, Tuple, Dict, Union, Any
 
 import torch
 import torch.nn as nn
@@ -162,3 +163,125 @@ class GemmaMultiHeadClassifier(nn.Module):
             'subcategory_head': self.subcategory_head.state_dict()
         }
         torch.save(heads_state, os.path.join(save_directory, "heads.pt"))
+
+        classifier_meta = {
+            "num_categories": int(self.category_head.weight.shape[0]),
+            "num_subcategories": int(self.subcategory_head.weight.shape[0]),
+            "loss_weights": [float(x) for x in self.loss_weights],
+            "focal_gamma": float(self.focal_gamma),
+        }
+        meta_path = os.path.join(save_directory, "classifier_config.json")
+        with open(meta_path, "w") as f:
+            json.dump(classifier_meta, f, indent=2)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        checkpoint_dir: str,
+        *,
+        model_name_or_path: Optional[str] = None,
+        hf_token: Optional[str] = None,
+        torch_dtype: Optional[torch.dtype] = None,
+        trust_remote_code: bool = True,
+        device_map: Optional[Union[str, Dict[str, int]]] = None,
+        loss_weights: Optional[Tuple[float, ...]] = None,
+        focal_gamma: float = 2.0,
+    ) -> "GemmaMultiHeadClassifier":
+        """Load either a full fine-tuned checkpoint or a LoRA adapter
+        checkpoint.
+
+        Expected artifacts in `checkpoint_dir`:
+        - Always: `heads.pt`
+            - Full fine-tune: backbone weights/config saved via
+                `backbone.save_pretrained()`
+            - LoRA: PEFT adapter files (e.g., `adapter_config.json`) saved
+                via `PeftModel.save_pretrained()`
+        """
+
+        heads_path = os.path.join(checkpoint_dir, "heads.pt")
+        if not os.path.exists(heads_path):
+            raise FileNotFoundError(
+                f"Missing heads.pt in checkpoint: {checkpoint_dir}"
+            )
+        heads_state: Dict[str, Any] = torch.load(
+            heads_path, map_location="cpu"
+        )
+
+        num_categories = int(heads_state["category_head"]["weight"].shape[0])
+        num_subcategories = int(
+            heads_state["subcategory_head"]["weight"].shape[0]
+        )
+
+        classifier_config_path = os.path.join(
+            checkpoint_dir, "classifier_config.json"
+        )
+        if os.path.exists(classifier_config_path):
+            try:
+                with open(classifier_config_path, "r") as f:
+                    meta = json.load(f)
+                if loss_weights is None and "loss_weights" in meta:
+                    loss_weights = tuple(
+                        float(x) for x in meta["loss_weights"]
+                    )
+                if "focal_gamma" in meta:
+                    focal_gamma = float(meta["focal_gamma"])
+            except Exception:
+                # Metadata is optional; ignore parse errors.
+                pass
+
+        # Detect LoRA adapter checkpoint by presence of
+        # PEFT adapter_config.json
+        is_lora_adapter = os.path.exists(
+            os.path.join(checkpoint_dir, "adapter_config.json")
+        )
+
+        if is_lora_adapter:
+            from transformers import AutoModelForCausalLM
+            from peft import PeftConfig, PeftModel
+
+            peft_cfg = PeftConfig.from_pretrained(checkpoint_dir)
+            base_name = model_name_or_path or peft_cfg.base_model_name_or_path
+            if base_name is None:
+                raise ValueError(
+                    "Unable to determine base model for LoRA checkpoint. "
+                    "Pass model_name_or_path explicitly."
+                )
+
+            base_backbone = AutoModelForCausalLM.from_pretrained(
+                base_name,
+                token=hf_token,
+                torch_dtype=torch_dtype,
+                trust_remote_code=trust_remote_code,
+                device_map=device_map,
+            ).model
+            backbone = PeftModel.from_pretrained(
+                base_backbone,
+                checkpoint_dir,
+                is_trainable=False,
+            )
+        else:
+            from transformers import AutoModel
+
+            backbone = AutoModel.from_pretrained(
+                checkpoint_dir,
+                token=hf_token,
+                torch_dtype=torch_dtype,
+                trust_remote_code=trust_remote_code,
+                device_map=device_map,
+            )
+
+        if loss_weights is None:
+            loss_weights = (1.0, 1.0, 1.0)
+
+        model = cls(
+            backbone,
+            num_categories=num_categories,
+            num_subcategories=num_subcategories,
+            loss_weights=loss_weights,
+            focal_gamma=focal_gamma,
+        )
+
+        model.threat_head.load_state_dict(heads_state["threat_head"])
+        model.category_head.load_state_dict(heads_state["category_head"])
+        model.subcategory_head.load_state_dict(heads_state["subcategory_head"])
+        return model

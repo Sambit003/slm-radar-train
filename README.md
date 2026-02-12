@@ -1,17 +1,18 @@
 # SLM Radar Train
 
-This project provides a training pipeline for fine-tuning Small Language Models (SLMs) with a custom multi-head classifier architecture, designed for radar/threat detection tasks. It utilizes Hugging Face `transformers`, `peft` for LoRA fine-tuning, and `mlflow` for tracking.
+This project provides a training pipeline for fine-tuning Small Language Models (SLMs) with a custom multi-head classifier architecture, designed for radar/threat detection tasks. It utilizes Hugging Face `transformers`, optional `peft` for LoRA fine-tuning, and `mlflow` for tracking.
 
 ## Features
 
 - **Model**: Fine-tunes models like Google's Gemma using a custom `GemmaMultiHeadClassifier`.
 - **LoRA Support**: Implements Low-Rank Adaptation (LoRA) for parameter-efficient fine-tuning.
+- **Full Fine-tuning**: Supports training all backbone weights (no adapters).
 - **Tracking**: Integrated MLflow tracking with ngrok support for remote monitoring.
 - **Precision**: Handles BF16/FP32 precision settings automatically based on device support (e.g., specific handling for NVIDIA T4).
 
 ## Project Structure
 
-```
+```text
 slm-radar-train/
 ├── train.py                # Main training script
 ├── requirements.txt        # Python dependencies
@@ -64,8 +65,11 @@ Run `train.py` with the desired parameters. Below is a comprehensive example:
 ```bash
 python train.py \
     --model_name_or_path google/gemma-3-270m \
+   --finetune_mode lora \
     --gpu_type nvidia-t4 \ #This argument is only needed when you're on T4 gpu
-    --dataset_path <DATASET_PATH> \
+   --train_file <TRAIN_JSONL_PATH> \
+   --validation_file <VAL_JSONL_PATH> \
+   --test_file <TEST_JSONL_PATH> \
     --output_dir ./output_gemma_radar \
     --hf_token "<YOUR_HF_TOKEN>" \ # HF token should be within "" (quotes)
     --num_train_epochs 3 \
@@ -83,9 +87,10 @@ python train.py \
     --save_strategy epoch \
     --load_best_model_at_end True \
     --metric_for_best_model eval_loss \
-    --val_size 0.1 \
-    --test_size 0.1 \
     --disable_gradient_checkpointing
+
+# For full fine-tuning (no LoRA adapters), use:
+#   --finetune_mode full
 ```
 
 ### Option 2: JSON Configuration
