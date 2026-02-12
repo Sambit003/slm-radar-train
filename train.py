@@ -83,9 +83,9 @@ def main():
     ]
 
     # Metric for Best Model (Early Stopping)
-    training_args.metric_for_best_model = "eval_loss"
+    training_args.metric_for_best_model = "eval_threat_mcc"
     training_args.load_best_model_at_end = True
-    training_args.greater_is_better = False
+    training_args.greater_is_better = True
     training_args.eval_strategy = "epoch"
     training_args.save_strategy = "epoch"
     training_args.max_grad_norm = 1.0
@@ -126,7 +126,7 @@ def main():
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            
+
             # Give it a moment to start
             time.sleep(3)
 
@@ -138,7 +138,7 @@ def main():
                 f"\n{'='*60}\n🚀 MLflow Dashboard available at: "
                 f"{public_url}\n{'='*60}\n"
             )
-            
+
         except Exception as e:
             logger.warning(
                 "Failed to set up Ngrok/MLflow UI automatically: %s",
@@ -184,13 +184,13 @@ def main():
         logger.info(f"Test: {len(test_ds)}")
 
     logger.info(f"Loading base model: {model_args.model_name_or_path}")
-    
+
     if model_args.fp32:
         dtype = torch.float32
     else:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         dtype = torch.bfloat16 if use_bf16 else torch.float32
-        
+
     base_model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         torch_dtype=dtype,
@@ -247,7 +247,7 @@ def main():
 
     # Scale head losses inversely with class count so
     # multi-class heads don't dominate the total loss.
-    w_threat = 1.0
+    w_threat = 3.0
     w_cat = 1.0
     w_subcat = 1.0
     logger.info(
@@ -256,12 +256,26 @@ def main():
         w_threat, w_cat, w_subcat
     )
 
+    # 1. Compute Class Weights
+    cw_threat, cw_cat, cw_subcat = threat_dataset.get_class_weights()
+    logger.info(f"Class Weights - Threat: {cw_threat}")
+
+    class_weights_dict = {
+        "threat": torch.tensor(cw_threat, dtype=dtype),
+        "category": torch.tensor(cw_cat, dtype=dtype),
+        "subcategory": torch.tensor(cw_subcat, dtype=dtype)
+    }
+
+    # 2. Adjust Focal Gamma (0.0 for binary threat, 2.0 for multi-class)
+    focal_gamma = (0.0, 2.0, 2.0)
+
     model = GemmaMultiHeadClassifier(
         base_model,
         num_categories=num_cats,
         num_subcategories=num_subcats,
         loss_weights=(w_threat, w_cat, w_subcat),
-        focal_gamma=2.0,
+        focal_gamma=focal_gamma,
+        class_weights=class_weights_dict
     )
 
     # Device-specific optimizations
@@ -308,14 +322,22 @@ def main():
     tokenizer.save_pretrained(training_args.output_dir)
 
     # Create & Save Model Card
-    threat_acc = trainer.state.log_history[-1].get(
-        "eval_threat_accuracy",
-        "N/A"
-    )
-    combined_acc = trainer.state.log_history[-1].get(
-        "eval_combined_accuracy",
-        "N/A"
-    )
+    # Try to find the last evaluation log
+    eval_logs = [entry for entry in trainer.state.log_history
+                 if "eval_threat_accuracy" in entry]
+    if eval_logs:
+        last_eval = eval_logs[-1]
+    else:
+        last_eval = {}
+
+    threat_acc = last_eval.get("eval_threat_accuracy", "N/A")
+    combined_acc = last_eval.get("eval_combined_accuracy", "N/A")
+
+    # Get optimal threshold stats
+    opt_thresh = last_eval.get("eval_threat_opt_thresh", "N/A")
+    opt_prec = last_eval.get("eval_threat_opt_precision", "N/A")
+    opt_rec = last_eval.get("eval_threat_opt_recall", "N/A")
+
     model_card = f"""---
 language: en
 tags:
@@ -337,8 +359,13 @@ Fine-tuned Gemma-3-270M for multi-head classification:
 
 ## Performance
 - **Threat Accuracy**: {threat_acc}
-- **Threat F1**: {trainer.state.log_history[-1].get('eval_threat_f1', 'N/A')}
+- **Threat F1**: {last_eval.get('eval_threat_f1', 'N/A')}
 - **Combined Accuracy**: {combined_acc}
+
+### Optimal Threshold (Recall >= 0.90)
+- **Threshold**: {opt_thresh}
+- **Precision**: {opt_prec}
+- **Recall**: {opt_rec}
 
 ## Training Config
 - **Epochs**: {training_args.num_train_epochs}

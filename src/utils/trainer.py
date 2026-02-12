@@ -6,7 +6,8 @@ from transformers import Trainer
 
 
 class MultiHeadTrainer(Trainer):
-    """Custom Trainer to handle multi-task loss calculation with training stabilization."""
+    """Custom Trainer to handle multi-task loss calculation
+    with training stabilization."""
 
     def __init__(self, *args, label_smoothing: float = 0.0, **kwargs):
         super().__init__(*args, **kwargs)
@@ -57,7 +58,9 @@ class MultiHeadTrainer(Trainer):
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[Tuple[torch.Tensor, ...]], Optional[Tuple[torch.Tensor, ...]]]:
+    ) -> Tuple[Optional[torch.Tensor],
+               Optional[Tuple[torch.Tensor, ...]],
+               Optional[Tuple[torch.Tensor, ...]]]:
         inputs = self._prepare_inputs(inputs)
 
         labels_threat = inputs.get("labels_threat")

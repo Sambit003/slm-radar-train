@@ -12,12 +12,14 @@ def focal_loss(
     targets: torch.LongTensor,
     gamma: float = 2.0,
     label_smoothing: float = 0.0,
+    weight: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Focal loss: down-weights easy examples."""
     ce = F.cross_entropy(
         logits, targets,
         reduction="none",
         label_smoothing=label_smoothing,
+        weight=weight,
     )
     p = F.softmax(logits.detach(), dim=-1)
     p_t = p.gather(1, targets.unsqueeze(1)).squeeze(1)
@@ -39,14 +41,36 @@ class GemmaMultiHeadClassifier(nn.Module):
         num_categories: int,
         num_subcategories: int,
         loss_weights: Tuple[float, ...] = (1.0, 1.0, 1.0),
-        focal_gamma: float = 2.0,
+        focal_gamma: Union[float, Tuple[float, ...]] = 2.0,
+        class_weights: Optional[Dict[str, torch.Tensor]] = None,
     ):
         super().__init__()
         self.backbone = base_model
         self.config = base_model.config
         hidden_size = self.config.hidden_size
         self.loss_weights = loss_weights
-        self.focal_gamma = focal_gamma
+
+        # Handle focal_gamma: can be float (shared) or tuple (per-head)
+        if isinstance(focal_gamma, (float, int)):
+            self.focal_gamma = (float(focal_gamma),) * 3
+        else:
+            self.focal_gamma = tuple(float(g) for g in focal_gamma)
+
+        # Register class weights as buffers so they move to device
+        # automatically
+        if class_weights is not None:
+            if "threat" in class_weights:
+                self.register_buffer("weight_threat", class_weights["threat"])
+            if "category" in class_weights:
+                self.register_buffer("weight_category",
+                                     class_weights["category"])
+            if "subcategory" in class_weights:
+                self.register_buffer("weight_subcategory",
+                                     class_weights["subcategory"])
+        else:
+            self.weight_threat = None
+            self.weight_category = None
+            self.weight_subcategory = None
 
         # Classification Heads
         self.head_dropout = nn.Dropout(p=0.1)
@@ -125,25 +149,29 @@ class GemmaMultiHeadClassifier(nn.Module):
             and labels_category is not None
             and labels_subcategory is not None
         ):
+            # Using head-specific gamma and class weights
             loss_t = focal_loss(
                 logits_threat.float(),
                 labels_threat.long(),
-                gamma=self.focal_gamma,
+                gamma=self.focal_gamma[0],
                 label_smoothing=label_smoothing,
+                weight=getattr(self, "weight_threat", None),
             ) * self.loss_weights[0]
 
             loss_c = focal_loss(
                 logits_category.float(),
                 labels_category.long(),
-                gamma=self.focal_gamma,
+                gamma=self.focal_gamma[1],
                 label_smoothing=label_smoothing,
+                weight=getattr(self, "weight_category", None),
             ) * self.loss_weights[1]
 
             loss_s = focal_loss(
                 logits_subcategory.float(),
                 labels_subcategory.long(),
-                gamma=self.focal_gamma,
+                gamma=self.focal_gamma[2],
                 label_smoothing=label_smoothing,
+                weight=getattr(self, "weight_subcategory", None),
             ) * self.loss_weights[2]
 
             loss = loss_t + loss_c + loss_s
@@ -168,7 +196,7 @@ class GemmaMultiHeadClassifier(nn.Module):
             "num_categories": int(self.category_head.weight.shape[0]),
             "num_subcategories": int(self.subcategory_head.weight.shape[0]),
             "loss_weights": [float(x) for x in self.loss_weights],
-            "focal_gamma": float(self.focal_gamma),
+            "focal_gamma": [float(x) for x in self.focal_gamma],
         }
         meta_path = os.path.join(save_directory, "classifier_config.json")
         with open(meta_path, "w") as f:
@@ -185,7 +213,8 @@ class GemmaMultiHeadClassifier(nn.Module):
         trust_remote_code: bool = True,
         device_map: Optional[Union[str, Dict[str, int]]] = None,
         loss_weights: Optional[Tuple[float, ...]] = None,
-        focal_gamma: float = 2.0,
+        focal_gamma: Union[float, Tuple[float, ...]] = 2.0,
+        class_weights: Optional[Dict[str, torch.Tensor]] = None,
     ) -> "GemmaMultiHeadClassifier":
         """Load either a full fine-tuned checkpoint or a LoRA adapter
         checkpoint.
@@ -224,7 +253,12 @@ class GemmaMultiHeadClassifier(nn.Module):
                         float(x) for x in meta["loss_weights"]
                     )
                 if "focal_gamma" in meta:
-                    focal_gamma = float(meta["focal_gamma"])
+                    # Can be float for backward compat or list of floats
+                    fg = meta["focal_gamma"]
+                    if isinstance(fg, (float, int)):
+                        focal_gamma = float(fg)
+                    elif isinstance(fg, list):
+                        focal_gamma = tuple(float(x) for x in fg)
             except Exception:
                 # Metadata is optional; ignore parse errors.
                 pass
@@ -279,6 +313,7 @@ class GemmaMultiHeadClassifier(nn.Module):
             num_subcategories=num_subcategories,
             loss_weights=loss_weights,
             focal_gamma=focal_gamma,
+            class_weights=class_weights,
         )
 
         model.threat_head.load_state_dict(heads_state["threat_head"])
