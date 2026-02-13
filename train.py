@@ -88,7 +88,6 @@ def main():
     training_args.greater_is_better = False
     training_args.eval_strategy = "epoch"
     training_args.save_strategy = "epoch"
-    training_args.lr_scheduler_type = "cosine"
 
     logger.info(
         "Training Stabilization: max_grad_norm=%s, warmup_ratio=%s, "
