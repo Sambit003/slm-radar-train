@@ -48,6 +48,11 @@ class ModelArguments:
             )
         }
     )
+    early_stopping_patience: int = field(
+        default=3,
+        metadata={"help": "Number of epochs to wait \
+                          for improvement before stopping."}
+    )
     fp32: bool = field(
         default=False,
         metadata={"help": "Whether to use fp32 mode."}
