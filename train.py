@@ -83,12 +83,12 @@ def main():
     ]
 
     # Metric for Best Model (Early Stopping)
-    training_args.metric_for_best_model = "eval_threat_mcc"
+    training_args.metric_for_best_model = "eval_loss"
     training_args.load_best_model_at_end = True
-    training_args.greater_is_better = True
+    training_args.greater_is_better = False
     training_args.eval_strategy = "epoch"
     training_args.save_strategy = "epoch"
-    training_args.max_grad_norm = 1.0
+    training_args.max_grad_norm = 0.5
     training_args.lr_scheduler_type = "cosine"
 
     logger.info(
@@ -247,7 +247,7 @@ def main():
 
     # Scale head losses inversely with class count so
     # multi-class heads don't dominate the total loss.
-    w_threat = 3.0
+    w_threat = 1.5
     w_cat = 1.0
     w_subcat = 1.0
     logger.info(
@@ -301,7 +301,7 @@ def main():
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=7,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5,
                                          early_stopping_threshold=0.0)],
         label_smoothing=training_args.label_smoothing_factor
     )
