@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -38,6 +39,49 @@ class ModelArguments:
     lora_dropout: float = field(
         default=0.05,
         metadata={"help": "LoRA dropout (used only when finetune_mode='lora')"}
+    )
+    lora_target_modules: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Comma-separated LoRA target module names. "
+                "If omitted, defaults are selected based on model "
+                "architecture."
+            )
+        },
+    )
+    loss_weights: str = field(
+        default="1.5,1.0,1.0",
+        metadata={
+            "help": (
+                "Comma-separated head loss weights as "
+                "'threat,category,subcategory'."
+            )
+        },
+    )
+    focal_gamma: str = field(
+        default="0.0,2.0,2.0",
+        metadata={
+            "help": (
+                "Comma-separated focal gamma values as "
+                "'threat,category,subcategory'."
+            )
+        },
+    )
+    head_dropout: float = field(
+        default=0.1,
+        metadata={
+            "help": "Dropout probability applied before classification heads."
+        },
+    )
+    pooling_strategy: str = field(
+        default="auto",
+        metadata={
+            "help": (
+                "Pooling strategy hint: auto/eos/cls/mean. "
+                "Current built-in models use architecture defaults."
+            )
+        },
     )
     gpu_type: str = field(
         default=None,

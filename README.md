@@ -1,10 +1,11 @@
 # SLM Radar Train
 
-This project provides a training pipeline for fine-tuning Small Language Models (SLMs) with a custom multi-head classifier architecture, designed for radar/threat detection tasks. It utilizes Hugging Face `transformers`, optional `peft` for LoRA fine-tuning, and `mlflow` for tracking.
+This project provides a training pipeline for fine-tuning Small Language Models (SLMs) with a modular multi-head classifier architecture, designed for radar/threat detection tasks. It utilizes Hugging Face `transformers`, optional `peft` for LoRA fine-tuning, and `mlflow` for tracking.
 
 ## Features
 
-- **Model**: Fine-tunes models like Google's Gemma using a custom `GemmaMultiHeadClassifier`.
+- **Modular Model Layer**: Uses a model registry/factory so multiple backbones can plug into the same training pipeline.
+- **Built-in Architectures**: Includes Gemma, LLaMA/Mistral, and BERT/DeBERTa-family wrappers.
 - **LoRA Support**: Implements Low-Rank Adaptation (LoRA) for parameter-efficient fine-tuning.
 - **Full Fine-tuning**: Supports training all backbone weights (no adapters).
 - **Tracking**: Integrated MLflow tracking with ngrok support for remote monitoring.
@@ -20,7 +21,7 @@ slm-radar-train/
 │   └── stable_training.json
 └── src/
     ├── data/               # Dataset loading and processing
-    ├── model/              # Custom model definitions
+    ├── model/              # Modular model registry + classifier definitions
     └── utils/              # Configuration, metrics, and trainer utilities
 ```
 
@@ -82,6 +83,9 @@ python train.py \
     --weight_decay 0.01 \
     --label_smoothing_factor 0.1 \
     --lora_r 16 \
+   --loss_weights 1.5,1.0,1.0 \
+   --focal_gamma 0.0,2.0,2.0 \
+   --head_dropout 0.1 \
     --logging_steps 10 \
     --eval_strategy epoch \
     --save_strategy epoch \
@@ -91,7 +95,23 @@ python train.py \
 
 # For full fine-tuning (no LoRA adapters), use:
 #   --finetune_mode full
+
+# To override LoRA targets explicitly, use:
+#   --lora_target_modules q_proj,v_proj,k_proj,o_proj
+
+# Example BERT-family run:
+#   --model_name_or_path bert-base-uncased
 ```
+
+## Add a New Model Architecture
+
+1. Create a new class in `src/model/` that extends `BaseMultiHeadClassifier`.
+2. Register it with `@register_model("your_model_type")`.
+3. Implement:
+   - `get_lora_target_modules()`
+   - `_get_hidden_size()`
+   - `_pool(...)`
+4. Run training with `--model_name_or_path ...`; the class is auto-selected from HF `config.model_type`.
 
 ### Option 2: JSON Configuration
 

@@ -4,13 +4,13 @@ import logging
 import subprocess
 import torch
 import time
+from typing import Optional, Tuple
 
 import mlflow
 from pyngrok import ngrok
 from huggingface_hub import login
 from transformers import (
     AutoTokenizer,
-    AutoModelForCausalLM,
     TrainingArguments,
     HfArgumentParser,
     set_seed,
@@ -22,7 +22,7 @@ from src.utils.config import ModelArguments, DataArguments
 from src.utils.device import get_device, get_device_type
 from src.utils.trainer import MultiHeadTrainer
 from src.utils.metrics import compute_metrics
-from src.model.modeling import GemmaMultiHeadClassifier
+from src.model import get_model_class
 from src.data.dataset import ThreatDataset
 
 logging.basicConfig(
@@ -37,6 +37,31 @@ logger.setLevel(logging.INFO)
 
 logging.getLogger("pyngrok").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+
+def _parse_triplet(raw: str, arg_name: str) -> Tuple[float, float, float]:
+    parts = [x.strip() for x in (raw or "").split(",") if x.strip()]
+    if len(parts) != 3:
+        raise ValueError(
+            f"--{arg_name} must have exactly 3 comma-separated values. "
+            f"Got: {raw!r}"
+        )
+    return float(parts[0]), float(parts[1]), float(parts[2])
+
+
+def _parse_lora_target_modules(
+    override: Optional[str],
+    default_targets: Tuple[str, ...],
+) -> Tuple[str, ...]:
+    if override is None or not override.strip():
+        return default_targets
+    parts = tuple(x.strip() for x in override.split(",") if x.strip())
+    if not parts:
+        raise ValueError(
+            "--lora_target_modules was provided but no valid "
+            "module names were found."
+        )
+    return parts
 
 
 def main():
@@ -183,18 +208,33 @@ def main():
 
     logger.info(f"Loading base model: {model_args.model_name_or_path}")
 
+    model_class = get_model_class(
+        model_args.model_name_or_path,
+        hf_token=model_args.hf_token,
+        trust_remote_code=True,
+    )
+    logger.info("Resolved classifier class: %s", model_class.__name__)
+
+    if model_args.pooling_strategy != "auto":
+        logger.warning(
+            "pooling_strategy=%s requested, but current built-in models use "
+            "their "
+            "architecture defaults.",
+            model_args.pooling_strategy,
+        )
+
     if model_args.fp32:
         dtype = torch.float32
     else:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         dtype = torch.bfloat16 if use_bf16 else torch.float32
 
-    base_model = AutoModelForCausalLM.from_pretrained(
+    base_model = model_class.load_train_backbone(
         model_args.model_name_or_path,
         torch_dtype=dtype,
         trust_remote_code=True,
-        token=model_args.hf_token
-    ).model
+        token=model_args.hf_token,
+    )
 
     finetune_mode = (model_args.finetune_mode or "lora").lower().strip()
     if finetune_mode not in {"lora", "full"}:
@@ -210,10 +250,11 @@ def main():
                 f"Got: {model_args.lora_r}"
             )
 
-        target_modules = [
-            "q_proj", "v_proj", "k_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj"
-        ]
+        target_modules = _parse_lora_target_modules(
+            model_args.lora_target_modules,
+            model_class.get_lora_target_modules(),
+        )
+        logger.info("LoRA target modules: %s", list(target_modules))
         peft_config = LoraConfig(
             task_type=TaskType.FEATURE_EXTRACTION,
             inference_mode=False,
@@ -243,11 +284,9 @@ def main():
     num_cats = len(threat_dataset.encoders['category'].classes_)
     num_subcats = len(threat_dataset.encoders['subcategory'].classes_)
 
-    # Scale head losses inversely with class count so
-    # multi-class heads don't dominate the total loss.
-    w_threat = 1.5
-    w_cat = 1.0
-    w_subcat = 1.0
+    w_threat, w_cat, w_subcat = _parse_triplet(
+        model_args.loss_weights, "loss_weights"
+    )
     logger.info(
         "Loss head weights: threat=%.4f, category=%.4f, "
         "subcategory=%.4f",
@@ -264,16 +303,16 @@ def main():
         "subcategory": torch.tensor(cw_subcat, dtype=dtype)
     }
 
-    # 2. Adjust Focal Gamma (0.0 for binary threat, 2.0 for multi-class)
-    focal_gamma = (0.0, 2.0, 2.0)
+    focal_gamma = _parse_triplet(model_args.focal_gamma, "focal_gamma")
 
-    model = GemmaMultiHeadClassifier(
+    model = model_class(
         base_model,
         num_categories=num_cats,
         num_subcategories=num_subcats,
         loss_weights=(w_threat, w_cat, w_subcat),
         focal_gamma=focal_gamma,
-        class_weights=class_weights_dict
+        class_weights=class_weights_dict,
+        head_dropout=model_args.head_dropout,
     )
 
     # Device-specific optimizations
@@ -285,8 +324,13 @@ def main():
     # Gradient checkpointing with proper kwargs
     if data_args.disable_gradient_checkpointing:
         training_args.gradient_checkpointing = False
-        base_model.config.use_cache = True
-        logger.info("Gradient Checkpointing DISABLED. use_cache=True FORCED.")
+        if hasattr(base_model.config, "use_cache"):
+            base_model.config.use_cache = True
+            logger.info(
+                "Gradient Checkpointing DISABLED. use_cache=True FORCED."
+            )
+        else:
+            logger.info("Gradient Checkpointing DISABLED.")
     elif data_args.use_gradient_checkpointing:
         training_args.gradient_checkpointing = True
         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
@@ -338,10 +382,12 @@ def main():
     opt_prec = last_eval.get("eval_threat_opt_precision", "N/A")
     opt_rec = last_eval.get("eval_threat_opt_recall", "N/A")
 
+    model_name = model_args.model_name_or_path
+    model_family = model_class.__name__.replace("MultiHeadClassifier", "")
     model_card = f"""---
 language: en
 tags:
-- gemma
+- {model_name}
 - threat-detection
 - classification
 - slm-radar
@@ -350,9 +396,9 @@ metrics:
 - f1
 ---
 
-# SLM Radar: Gemma-3 Threat Classifier
+# SLM Radar: {model_family} Threat Classifier
 
-Fine-tuned Gemma-3-270M for multi-head classification:
+Fine-tuned {model_name} for multi-head classification:
 1. **Threat Detection** (Safe/Unsafe)
 2. **Category** (Harm Category)
 3. **Subcategory** (Specific Harm Type)
