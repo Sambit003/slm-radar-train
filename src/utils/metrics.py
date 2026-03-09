@@ -61,6 +61,8 @@ def compute_metrics(eval_pred: EvalPrediction):
         auc_t = roc_auc_score(labels_threat, probs_t)
     except ValueError:
         auc_t = 0.0
+    if not np.isfinite(auc_t):
+        auc_t = 0.0
 
     # --- THREAT THRESHOLD SWEEP ---
     # Find threshold that maximizes precision while keeping recall >= 0.90

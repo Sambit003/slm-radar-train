@@ -10,3 +10,5 @@ pandas
 tqdm
 mlflow
 pyngrok
+pytest
+pytest-cov
